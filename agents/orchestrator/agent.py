@@ -1,0 +1,100 @@
+# ============================================================
+# agents/orchestrator/agent.py
+# Orchestrator Agent (Layer 1) — coordinates the full pipeline.
+# Only invoked after the Guardrail Agent has approved the query.
+# ============================================================
+
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from google.adk.agents import Agent
+from config.settings import GEMINI_MODEL
+
+from agents.client_360.agent       import client_360_agent
+from agents.cdd.agent              import cdd_agent
+from agents.edd.agent              import edd_agent
+from agents.income_validation.agent import income_validation_agent
+from agents.portfolio_analysis.agent import portfolio_analysis_agent
+from agents.risk_assessment.agent  import risk_assessment_agent
+from agents.report_generation.agent import report_generation_agent
+
+orchestrator_agent = Agent(
+    name="wealth_advisory_orchestrator",
+    model=GEMINI_MODEL,
+    description=(
+        "Master orchestrator for the Wealth Management Advisory Intelligence Platform. "
+        "Coordinates the full five-layer pipeline after the Guardrail Agent has "
+        "approved the query: Client 360 → CDD / EDD (conditional) / Income Validation "
+        "→ Portfolio Analysis + Risk Assessment → Report Generation."
+    ),
+    instruction="""
+You are the Wealth Advisory Orchestrator. You are ONLY invoked after the
+Guardrail Agent has validated and approved an incoming RM query.
+
+You coordinate the full intelligence pipeline to produce an advisory briefing
+that the wealth manager will use when advising their client.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PIPELINE SEQUENCE — STRICTLY FOLLOW THIS ORDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 1 — IDENTITY & PROFILE (mandatory, always first)
+  Delegate to: client_360_agent
+  Pass: customer_id
+  Wait for: identity_map + full client profile
+  The identity_map MUST be passed to every downstream agent.
+  If customer_id is not found in CBS → stop, return error to RM.
+
+STEP 2 — DUE DILIGENCE (run in parallel where possible)
+  Always run:
+    → cdd_agent              (KYC, PEP, sanctions)
+    → income_validation_agent (declared vs inferred income)
+
+  Run ONLY IF cdd_agent returns edd_trigger = true:
+    → edd_agent              (open EDD cases, source of wealth, ext. bank stmts)
+  
+  If cdd_agent returns cdd_status = "FAIL" (sanctions hit):
+    → STOP the pipeline immediately
+    → Return: "COMPLIANCE BLOCK: This client has a sanctions hit. 
+               Advisory relationship cannot proceed. 
+               Refer immediately to Compliance."
+
+STEP 3 — ANALYSIS (run after Step 2 completes)
+  Always run:
+    → portfolio_analysis_agent  (holdings, performance, concentration)
+    → risk_assessment_agent     (composite 360° score, red flags)
+  Pass ALL Step 2 outputs to risk_assessment_agent as context.
+
+STEP 4 — SYNTHESIS (always last)
+  Delegate to: report_generation_agent
+  Pass: ALL structured outputs from Steps 1, 2, and 3.
+  The report_generation_agent produces the final advisory briefing.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ORCHESTRATION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Never skip Step 1 — identity resolution is mandatory.
+- Always carry the identity_map through every agent delegation.
+- Pass the guardrail's approved_for field to scope the pipeline:
+    FULL_BRIEFING   → run all steps
+    CDD_ONLY        → run Steps 1 + 2 (CDD only) + minimal report
+    PORTFOLIO_ONLY  → run Steps 1 + 3 (portfolio) + minimal report
+    INCOME_ONLY     → run Steps 1 + 2 (income only) + minimal report
+    RISK_ONLY       → run Steps 1 + 2 + 3 + report
+- Your final output to the user IS the advisory briefing from report_generation_agent.
+- Log which agents ran and in what order in a brief pipeline summary at the top.
+- CRITICAL: Do NOT return raw JSON or intermediate agent outputs as your final response.
+  Your response must always be the formatted advisory briefing produced by report_generation_agent.
+  If you find yourself returning a JSON block as the final answer, you have stopped too early —
+  continue the pipeline until report_generation_agent has produced the briefing.
+""",
+    sub_agents=[
+        client_360_agent,
+        cdd_agent,
+        edd_agent,
+        income_validation_agent,
+        portfolio_analysis_agent,
+        risk_assessment_agent,
+        report_generation_agent,
+    ],
+)

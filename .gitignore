@@ -1,0 +1,36 @@
+# Environment & secrets
+.env
+.env.*
+*.env
+.env_bkp
+
+# Claude Code settings
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Logs (runtime output, not source)
+logs/
+
+# Node / UI
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# Databases
+*.db
+
+# IDE / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db

@@ -28,6 +28,8 @@ function Badge({ value, styleMap }) {
 }
 
 export default function ClientSnapshot({ data }) {
+  if (!data) return null;
+
   const rows = [
     {
       label: 'Segment',

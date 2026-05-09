@@ -89,7 +89,10 @@ export default function PortfolioSummary({ data }) {
           <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
             Asset Allocation
           </div>
-          <DonutChart allocation={data.asset_allocation} />
+          {data.asset_allocation
+            ? <DonutChart allocation={data.asset_allocation} />
+            : <p className="text-slate-400 text-sm">No allocation data.</p>
+          }
         </div>
 
         {/* Portfolios table */}
@@ -112,7 +115,7 @@ export default function PortfolioSummary({ data }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {data.portfolios.map((p, i) => {
+                {(data.portfolios ?? []).map((p, i) => {
                   const alphaVal = parseFloat(p.alpha) || 0;
                   return (
                     <tr key={i} className="hover:bg-slate-50 transition-colors">

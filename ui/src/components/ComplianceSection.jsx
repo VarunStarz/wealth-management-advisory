@@ -23,6 +23,8 @@ function FlagCard({ flag, level }) {
 }
 
 export default function ComplianceSection({ data }) {
+  if (!data) return null;
+
   const high   = data.red_flags_high ?? [];
   const medium = data.caution_points_medium ?? [];
 

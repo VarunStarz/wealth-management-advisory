@@ -17,6 +17,7 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 ALTER TABLE IF EXISTS ONLY public.identity_documents DROP CONSTRAINT IF EXISTS identity_documents_kyc_id_fkey;
+DROP INDEX IF EXISTS public.idx_kyc_master_pan;
 ALTER TABLE IF EXISTS ONLY public.risk_classification DROP CONSTRAINT IF EXISTS risk_classification_pkey;
 ALTER TABLE IF EXISTS ONLY public.risk_classification DROP CONSTRAINT IF EXISTS risk_classification_customer_id_key;
 ALTER TABLE IF EXISTS ONLY public.pep_screening DROP CONSTRAINT IF EXISTS pep_screening_pkey;
@@ -219,7 +220,8 @@ CREATE TABLE public.kyc_master (
     expiry_date date,
     re_kyc_due date,
     verified_by character varying(50),
-    notes text
+    notes text,
+    pan_number character varying(10)
 );
 
 
@@ -305,21 +307,21 @@ DOC000000022	KYC000000014	AADHAAR	96543210	UIDAI	2011-09-20	9999-12-31	VALID	DMS
 -- Data for Name: kyc_master; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.kyc_master (kyc_id, customer_id, kyc_type, kyc_status, kyc_tier, verification_method, verified_date, expiry_date, re_kyc_due, verified_by, notes) FROM stdin;
-KYC000000001	CUST000001	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2021-06-01	2026-06-01	2026-06-01	ComplianceOfficer_01	\N
-KYC000000002	CUST000002	E_KYC	VERIFIED	STANDARD	AADHAAR_OTP	2022-03-15	2027-03-15	2027-03-15	System_Auto	\N
-KYC000000003	CUST000003	IN_PERSON	VERIFIED	ENHANCED	BIOMETRIC	2020-11-20	2025-11-20	2024-11-20	ComplianceOfficer_02	UHNI client - enhanced monitoring active
-KYC000000004	CUST000004	E_KYC	VERIFIED	STANDARD	AADHAAR_OTP	2023-01-10	2028-01-10	2028-01-10	System_Auto	\N
-KYC000000005	CUST000005	IN_PERSON	UNDER_REVIEW	ENHANCED	DOCUMENT	2022-08-05	\N	2024-08-05	ComplianceOfficer_01	Large cash deposits flagged. EDD initiated.
-KYC000000006	CUST000006	IN_PERSON	VERIFIED	ENHANCED	BIOMETRIC	2019-02-14	2024-02-14	2024-02-14	ComplianceOfficer_02	UHNI. Multiple property assets. Re-KYC overdue.
-KYC000000007	CUST000007	VIDEO_KYC	VERIFIED	STANDARD	VIDEO_CALL	2022-07-22	2027-07-22	2027-07-22	System_Video	\N
-KYC000000008	CUST000008	IN_PERSON	VERIFIED	ENHANCED	DOCUMENT	2021-04-30	2026-04-30	2026-04-30	ComplianceOfficer_03	Government official - PEP Category B
-KYC000000009	CUST000009	IN_PERSON	VERIFIED	ENHANCED	BIOMETRIC	2018-09-01	2023-09-01	2023-09-01	ComplianceOfficer_02	Re-KYC OVERDUE. Complex corporate structure.
-KYC000000010	CUST000010	E_KYC	VERIFIED	STANDARD	AADHAAR_OTP	2023-06-18	2028-06-18	2028-06-18	System_Auto	\N
-KYC000000011	CUST000011	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2016-11-10	2026-11-10	2026-11-10	ComplianceOfficer_01	KYC verified at branch. HNI segment. MODERATE risk. Clean profile.
-KYC000000012	CUST000012	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2019-03-10	2029-03-10	2027-03-10	ComplianceOfficer_01	NSE employee -- SEBI PFUTP Regulations 2003. All equity investments in NSE-listed securities prohibited. Portfolio limited to Debt/Gold/Govt Bonds. Employer pre-clearance certificate on file.
-KYC000000013	CUST000013	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2017-07-22	2027-07-22	2027-07-22	ComplianceOfficer_02	Long-standing HNI client. Conservative investor. KYC current. Suitability review in progress following client request to upgrade risk appetite.
-KYC000000014	CUST000014	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2015-06-18	2025-06-18	2027-06-18	ComplianceOfficer_01	Aggressive HNI investor. Business owner. KYC current. Suffered heavy portfolio losses in FY2022-23. Risk reclassification in progress following client request to shift conservative.
+COPY public.kyc_master (kyc_id, customer_id, kyc_type, kyc_status, kyc_tier, verification_method, verified_date, expiry_date, re_kyc_due, verified_by, notes, pan_number) FROM stdin;
+KYC000000001	CUST000001	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2021-06-01	2026-06-01	2026-06-01	ComplianceOfficer_01	\N	AXBPM1234C
+KYC000000002	CUST000002	E_KYC	VERIFIED	STANDARD	AADHAAR_OTP	2022-03-15	2027-03-15	2027-03-15	System_Auto	\N	BQCPI5678D
+KYC000000003	CUST000003	IN_PERSON	VERIFIED	ENHANCED	BIOMETRIC	2020-11-20	2025-11-20	2024-11-20	ComplianceOfficer_02	UHNI client - enhanced monitoring active	CRDQS9012E
+KYC000000004	CUST000004	E_KYC	VERIFIED	STANDARD	AADHAAR_OTP	2023-01-10	2028-01-10	2028-01-10	System_Auto	\N	DSERT3456F
+KYC000000005	CUST000005	IN_PERSON	UNDER_REVIEW	ENHANCED	DOCUMENT	2022-08-05	\N	2024-08-05	ComplianceOfficer_01	Large cash deposits flagged. EDD initiated.	ETFUS7890G
+KYC000000006	CUST000006	IN_PERSON	VERIFIED	ENHANCED	BIOMETRIC	2019-02-14	2024-02-14	2024-02-14	ComplianceOfficer_02	UHNI. Multiple property assets. Re-KYC overdue.	FUGVA2345H
+KYC000000007	CUST000007	VIDEO_KYC	VERIFIED	STANDARD	VIDEO_CALL	2022-07-22	2027-07-22	2027-07-22	System_Video	\N	GVHWB6789J
+KYC000000008	CUST000008	IN_PERSON	VERIFIED	ENHANCED	DOCUMENT	2021-04-30	2026-04-30	2026-04-30	ComplianceOfficer_03	Government official - PEP Category B	HWIXC0123K
+KYC000000009	CUST000009	IN_PERSON	VERIFIED	ENHANCED	BIOMETRIC	2018-09-01	2023-09-01	2023-09-01	ComplianceOfficer_02	Re-KYC OVERDUE. Complex corporate structure.	IXJYD4567L
+KYC000000010	CUST000010	E_KYC	VERIFIED	STANDARD	AADHAAR_OTP	2023-06-18	2028-06-18	2028-06-18	System_Auto	\N	JYKZE8901M
+KYC000000011	CUST000011	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2016-11-10	2026-11-10	2026-11-10	ComplianceOfficer_01	KYC verified at branch. HNI segment. MODERATE risk. Clean profile.	KABVK3579N
+KYC000000012	CUST000012	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2019-03-10	2029-03-10	2027-03-10	ComplianceOfficer_01	NSE employee -- SEBI PFUTP Regulations 2003. All equity investments in NSE-listed securities prohibited. Portfolio limited to Debt/Gold/Govt Bonds. Employer pre-clearance certificate on file.	BKPMA5512L
+KYC000000013	CUST000013	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2017-07-22	2027-07-22	2027-07-22	ComplianceOfficer_02	Long-standing HNI client. Conservative investor. KYC current. Suitability review in progress following client request to upgrade risk appetite.	CLPSV7723K
+KYC000000014	CUST000014	IN_PERSON	VERIFIED	STANDARD	DOCUMENT	2015-06-18	2025-06-18	2027-06-18	ComplianceOfficer_01	Aggressive HNI investor. Business owner. KYC current. Suffered heavy portfolio losses in FY2022-23. Risk reclassification in progress following client request to shift conservative.	DKPRK8834M
 \.
 
 
@@ -421,6 +423,13 @@ ALTER TABLE ONLY public.risk_classification
 
 ALTER TABLE ONLY public.risk_classification
     ADD CONSTRAINT risk_classification_pkey PRIMARY KEY (risk_class_id);
+
+
+--
+-- Name: idx_kyc_master_pan; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_kyc_master_pan ON public.kyc_master USING btree (pan_number);
 
 
 --

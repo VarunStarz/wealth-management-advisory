@@ -22,55 +22,104 @@ logger = logging.getLogger(__name__)
 
 def get_identity_resolution_map(customer_id: str) -> str:
     """
-    Resolves the customer's golden record by joining all six source systems
-    on customer_id. This is always the first call in the pipeline — every
-    downstream agent depends on this identity map.
+    Resolves the customer's golden record across all six source systems.
+
+    Resolution strategy per system:
+      1. PAN number  — primary cross-system identifier (confidence: EXACT)
+      2. customer_id — legacy fallback if PAN lookup fails  (confidence: LOW)
+
+    PMS is always resolved via CRM's client_id, which is the correct
+    inter-system link (PMS never stores customer_id directly).
+
+    Returns a resolution_log showing which key matched each system so
+    downstream agents and the RM know how the profile was assembled.
 
     Args:
         customer_id: CBS master customer identifier (e.g. CUST000001)
 
     Returns:
-        JSON string with cross-system identity map
+        JSON string with cross-system identity map and resolution_log
     """
     logger.debug("→ entering get_identity_resolution_map(customer_id=%s)", customer_id)
 
+    # ── Step 1: CBS — system of record, always queried by customer_id ──
     cbs = query_one("cbs",
         "SELECT customer_id, party_id, full_name, pan_number, segment_code, "
         "mobile, email, customer_since, status "
         "FROM customer_master WHERE customer_id = %s", (customer_id,))
 
-    crm = query_one("crm",
-        "SELECT client_id, rm_id, segment, aum_band, investment_experience, "
-        "risk_appetite_stated, last_review_date, next_review_date "
-        "FROM client_profile WHERE customer_id = %s", (customer_id,))
-
-    kyc = query_one("kyc",
-        "SELECT kyc_id, kyc_status, kyc_tier, re_kyc_due, notes "
-        "FROM kyc_master WHERE customer_id = %s", (customer_id,))
-
     if not cbs:
         logger.debug("← returning from get_identity_resolution_map(customer_id=%s) — not found in CBS", customer_id)
         return to_json({"error": f"Customer {customer_id} not found in CBS"})
 
+    pan    = cbs.get("pan_number")
+    resolution_log = {"cbs": {"matched_via": "customer_id", "confidence": "EXACT"}}
+
+    def resolve(db, table, select_cols):
+        """Try PAN first, fall back to customer_id."""
+        if pan:
+            row = query_one(db,
+                f"SELECT {select_cols} FROM {table} WHERE pan_number = %s", (pan,))
+            if row:
+                return row, "pan_number", "EXACT"
+        row = query_one(db,
+            f"SELECT {select_cols} FROM {table} WHERE customer_id = %s", (customer_id,))
+        if row:
+            return row, "customer_id", "LOW"
+        return None, None, "NOT_FOUND"
+
+    # ── Step 2: CRM — resolve via PAN, fallback to customer_id ──
+    crm, crm_via, crm_conf = resolve("crm", "client_profile",
+        "client_id, rm_id, segment, aum_band, risk_appetite_stated, "
+        "last_review_date, next_review_date")
+    resolution_log["crm"] = {"matched_via": crm_via, "confidence": crm_conf}
+
+    # ── Step 3: KYC — resolve via PAN, fallback to customer_id ──
+    kyc, kyc_via, kyc_conf = resolve("kyc", "kyc_master",
+        "kyc_id, kyc_status, kyc_tier, re_kyc_due, notes")
+    resolution_log["kyc"] = {"matched_via": kyc_via, "confidence": kyc_conf}
+
+    # ── Step 4: CARD — resolve via PAN, fallback to customer_id ──
+    card, card_via, card_conf = resolve("card", "card_accounts", "card_id")
+    resolution_log["card"] = {"matched_via": card_via, "confidence": card_conf}
+
+    # ── Step 5: DMS — resolve via PAN, fallback to customer_id ──
+    dms_row, dms_via, dms_conf = resolve("dms", "document_repository", "dms_id")
+    resolution_log["dms"] = {"matched_via": dms_via, "confidence": dms_conf}
+
+    # ── Step 6: PMS — always via CRM client_id (correct inter-system link) ──
+    pms_row = None
+    if crm and crm.get("client_id"):
+        pms_row = query_one("pms",
+            "SELECT portfolio_id FROM portfolio_master WHERE client_id = %s",
+            (crm["client_id"],))
+        resolution_log["pms"] = {
+            "matched_via": "crm.client_id",
+            "confidence": "EXACT" if pms_row else "NOT_FOUND",
+        }
+    else:
+        resolution_log["pms"] = {"matched_via": None, "confidence": "NOT_FOUND"}
+
     result = to_json({
-        "customer_id":   customer_id,
-        "party_id":      cbs.get("party_id"),
-        "full_name":     cbs.get("full_name"),
-        "pan_number":    cbs.get("pan_number"),
-        "segment":       cbs.get("segment_code"),
-        "mobile":        cbs.get("mobile"),
-        "email":         cbs.get("email"),
-        "customer_since":cbs.get("customer_since"),
-        "cbs_status":    cbs.get("status"),
-        "crm_client_id": crm.get("client_id") if crm else None,
-        "rm_id":         crm.get("rm_id") if crm else None,
-        "aum_band":      crm.get("aum_band") if crm else None,
-        "risk_appetite": crm.get("risk_appetite_stated") if crm else None,
-        "kyc_id":        kyc.get("kyc_id") if kyc else None,
-        "kyc_status":    kyc.get("kyc_status") if kyc else "NOT_FOUND",
-        "kyc_tier":      kyc.get("kyc_tier") if kyc else None,
-        "re_kyc_due":    kyc.get("re_kyc_due") if kyc else None,
-        "kyc_notes":     kyc.get("notes") if kyc else None,
+        "customer_id":    customer_id,
+        "party_id":       cbs.get("party_id"),
+        "full_name":      cbs.get("full_name"),
+        "pan_number":     pan,
+        "segment":        cbs.get("segment_code"),
+        "mobile":         cbs.get("mobile"),
+        "email":          cbs.get("email"),
+        "customer_since": cbs.get("customer_since"),
+        "cbs_status":     cbs.get("status"),
+        "crm_client_id":  crm.get("client_id") if crm else None,
+        "rm_id":          crm.get("rm_id") if crm else None,
+        "aum_band":       crm.get("aum_band") if crm else None,
+        "risk_appetite":  crm.get("risk_appetite_stated") if crm else None,
+        "kyc_id":         kyc.get("kyc_id") if kyc else None,
+        "kyc_status":     kyc.get("kyc_status") if kyc else "NOT_FOUND",
+        "kyc_tier":       kyc.get("kyc_tier") if kyc else None,
+        "re_kyc_due":     kyc.get("re_kyc_due") if kyc else None,
+        "kyc_notes":      kyc.get("notes") if kyc else None,
+        "resolution_log": resolution_log,
     })
     logger.debug("← returning from get_identity_resolution_map(customer_id=%s)", customer_id)
     return result

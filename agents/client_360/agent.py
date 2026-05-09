@@ -42,7 +42,7 @@ STEPS — execute in this exact order:
      "identity_map":        { ...full output from get_identity_resolution_map, UNCHANGED... },
      "core_profile":        { ...full output from get_client_core_profile, UNCHANGED... },
      "transaction_signals": { ...full output from get_transaction_summary, UNCHANGED... },
-     "identity_gaps":       [ "<system_name> missing" for each null cross-system ID ],
+     "identity_gaps":       [ "<system_name>: NOT_FOUND" for each system where resolution_log confidence is NOT_FOUND ],
      "ai_observations":     [ "<insight>", ... ]
    }
 

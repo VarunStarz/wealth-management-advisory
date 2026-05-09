@@ -17,38 +17,81 @@ const ACTION = {
   COMPLIANCE_ESCALATION: { bg: 'bg-red-50',    text: 'text-red-700' },
 };
 
-function SemiGauge({ score }) {
-  const r = 38;
-  const cx = 60;
-  const cy = 58;
-  const semiCirc = Math.PI * r;
-  const filled = Math.min(score / 100, 1) * semiCirc;
+function SpeedometerGauge({ score }) {
+  const cx = 130, cy = 102;
+  const ro = 88, ri = 54;       // outer / inner radius → thick donut
+  const needleLen = 74;
+  const s = Math.min(Math.max(score, 0), 100);
 
-  let color = '#10b981';
-  if (score >= 40) color = '#f59e0b';
-  if (score >= 60) color = '#ef4444';
-  if (score >= 80) color = '#991b1b';
+  // angle: score 0 → π (left), score 100 → 0 (right)
+  const rad  = (sc) => Math.PI * (1 - sc / 100);
+  const outerPt = (sc) => [cx + ro * Math.cos(rad(sc)), cy - ro * Math.sin(rad(sc))];
+  const innerPt = (sc) => [cx + ri * Math.cos(rad(sc)), cy - ri * Math.sin(rad(sc))];
+
+  // Filled donut sector between score s1 and s2
+  const sector = (s1, s2) => {
+    const [ox1, oy1] = outerPt(s1);
+    const [ox2, oy2] = outerPt(s2);
+    const [ix2, iy2] = innerPt(s2);
+    const [ix1, iy1] = innerPt(s1);
+    const f = (n) => n.toFixed(3);
+    return [
+      `M ${f(ox1)} ${f(oy1)}`,
+      `A ${ro} ${ro} 0 0 0 ${f(ox2)} ${f(oy2)}`,  // outer arc CCW
+      `L ${f(ix2)} ${f(iy2)}`,
+      `A ${ri} ${ri} 0 0 1 ${f(ix1)} ${f(iy1)}`,  // inner arc CW (back)
+      'Z',
+    ].join(' ');
+  };
+
+  // 5 zones with a 2-score-unit gap between each
+  const ZONES = [
+    { s1:  1, s2: 19, fill: '#22c55e' },  // green   – low risk
+    { s1: 21, s2: 39, fill: '#84cc16' },  // lime
+    { s1: 41, s2: 59, fill: '#eab308' },  // yellow
+    { s1: 61, s2: 79, fill: '#f97316' },  // orange
+    { s1: 81, s2: 99, fill: '#ef4444' },  // red     – high risk
+  ];
+
+  const angle = rad(s);
+  const nx = cx + needleLen * Math.cos(angle);
+  const ny = cy - needleLen * Math.sin(angle);
+
+  let scoreColor = '#22c55e';
+  if (s >= 80) scoreColor = '#ef4444';
+  else if (s >= 60) scoreColor = '#f97316';
+  else if (s >= 40) scoreColor = '#eab308';
+  else if (s >= 20) scoreColor = '#84cc16';
 
   return (
-    <svg viewBox="0 0 120 76" className="w-full">
-      {/* track */}
-      <path
-        d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 0 ${cx + r} ${cy}`}
-        fill="none" stroke="#e2e8f0" strokeWidth="11" strokeLinecap="round"
-      />
-      {/* filled */}
-      <path
-        d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 0 ${cx + r} ${cy}`}
-        fill="none" stroke={color} strokeWidth="11" strokeLinecap="round"
-        strokeDasharray={`${filled} ${semiCirc}`}
-      />
-      {/* score */}
-      <text x={cx} y={cy - 6} textAnchor="middle" fill={color}
-        fontSize="22" fontWeight="800" fontFamily="Inter, system-ui, sans-serif">
+    <svg viewBox="0 0 260 138" className="w-full">
+      {/* Donut sectors */}
+      {ZONES.map(({ s1, s2, fill }) => (
+        <path key={s1} d={sector(s1, s2)} fill={fill} />
+      ))}
+
+      {/* LOW / HIGH axis labels */}
+      <text x={cx - ro - 4} y={cy + 15} textAnchor="middle"
+        fill="#94a3b8" fontSize="9" fontFamily="Inter, system-ui, sans-serif">LOW</text>
+      <text x={cx + ro + 4} y={cy + 15} textAnchor="middle"
+        fill="#94a3b8" fontSize="9" fontFamily="Inter, system-ui, sans-serif">HIGH</text>
+
+      {/* Needle */}
+      <line x1={cx} y1={cy} x2={nx.toFixed(3)} y2={ny.toFixed(3)}
+        stroke="#1e293b" strokeWidth="2.5" strokeLinecap="round" />
+
+      {/* Gold hub */}
+      <circle cx={cx} cy={cy} r="14" fill="#fbbf24" />
+      <circle cx={cx} cy={cy} r="8"  fill="#f59e0b" />
+      <circle cx={cx} cy={cy} r="3.5" fill="#1c1917" />
+
+      {/* Score */}
+      <text x={cx} y={cy + 23} textAnchor="middle" fill={scoreColor}
+        fontSize="20" fontWeight="800" fontFamily="Inter, system-ui, sans-serif">
         {score}
       </text>
-      <text x={cx} y={cy + 10} textAnchor="middle" fill="#94a3b8"
-        fontSize="9" fontFamily="Inter, system-ui, sans-serif">
+      <text x={cx} y={cy + 33} textAnchor="middle" fill="#94a3b8"
+        fontSize="8" fontFamily="Inter, system-ui, sans-serif">
         out of 100
       </text>
     </svg>
@@ -79,7 +122,7 @@ export default function RiskPanel({ data }) {
         <h2 className="text-white font-semibold text-xs uppercase tracking-widest">Risk Profile</h2>
       </div>
       <div className="p-5 flex flex-col items-center gap-4">
-        <SemiGauge score={data.risk_score} />
+        <SpeedometerGauge score={data.risk_score} />
 
         <div className={`w-full text-center py-2.5 rounded-xl border ${t.bg} ${t.border}`}>
           <div className={`text-base font-bold ${t.text}`}>

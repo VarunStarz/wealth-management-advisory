@@ -40,8 +40,29 @@ STEPS — execute in this exact order:
    Flag: cash advances, minimum-only payments, DPD.
 
 3. Call benchmark_income(role, industry, city)
-   Use the client's occupation and city from the Client 360 profile.
-   Get P25/P50/P75 annual compensation benchmarks.
+   Derive the three arguments from the Client 360 core_profile:
+
+   role — map from crm_profile.sub_segment:
+     "Promoter/HUF"      → "Promoter"
+     "Tech"              → "Tech Professional"
+     "Real Estate"       → "Business Owner"
+     "Consultant"        → "Consultant"
+     "Government"        → "Director"
+     "Pharma"            → "Pharma Distributor"
+     (other/unknown)     → use the nearest match or "Business Owner"
+
+   industry — map from sub_segment context:
+     "Promoter/HUF" with no specific sector → "Diversified"
+     "Tech"                                 → "Technology"
+     "Real Estate"                          → "Real Estate"
+     "Pharma"                               → "Pharmaceuticals"
+     "Consultant"                           → "Professional Svcs"
+     "Government"                           → "Government"
+
+   city — use the client's primary city if known; if not available in the
+     profile, default to "Mumbai" for UHNI/HNI segments, "Hyderabad" for
+     Pharma/Tech clients in Telangana, "Chennai" for South India Tech profiles,
+     "Kochi" for Government/Kerala profiles.
 
 4. Call detect_income_discrepancy(customer_id, declared_annual_gross, inferred_annual_min)
    Compare declared vs inferred. Flag if gap > 30%.

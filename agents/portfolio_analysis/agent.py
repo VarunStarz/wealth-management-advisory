@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from google.adk.agents import Agent
 from config.settings import GEMINI_MODEL
-from tools.agent_tools import get_portfolio_holdings, get_portfolio_performance
+from tools.agent_tools import get_portfolio_holdings, get_portfolio_performance, fetch_benchmark_returns
 
 portfolio_analysis_agent = Agent(
     name="portfolio_analysis_agent",
@@ -35,7 +35,13 @@ STEPS — execute in this exact order:
    Get performance history vs benchmark: alpha, Sharpe, tracking error,
    max drawdown.
 
-3. Return a structured portfolio analysis:
+3. If a risk_preference_tier is mentioned in your context, call:
+   fetch_benchmark_returns(risk_preference_tier)
+   This returns the expected 3-year CAGR for the customer's risk tier
+   (e.g. MEDIUM → Nifty 500 benchmark CAGR).
+   Use this to assess whether the portfolio meets the customer's return expectations.
+
+4. Return a structured portfolio analysis:
    {
      "total_aum_inr":          <number>,
      "portfolio_count":        <number>,
@@ -61,8 +67,17 @@ STEPS — execute in this exact order:
      "suitability_flags": [
        "<e.g. Equity 92% for CONSERVATIVE-stated client>"
      ],
+     "benchmark_comparison": {
+       "risk_preference_tier":  "NO_RISK|LOW|MEDIUM|HIGH",
+       "benchmark_name":        "<from fetch_benchmark_returns>",
+       "benchmark_cagr_3yr_pct": <number or null if not fetched>,
+       "verdict":               "ABOVE_EXPECTATION|MEETING_EXPECTATION|BELOW_EXPECTATION",
+       "expectation_note":      "<e.g. Portfolio alpha +2.3% vs Nifty 500 baseline 12.5% — consistent with MEDIUM risk tier expectations>"
+     },
      "portfolio_summary": "<2-3 sentence plain English assessment>"
    }
+
+   If no risk_preference_tier was provided in context, set benchmark_comparison to null.
 
 ANALYSIS RULES:
 - Single holding > 45% of portfolio weight → CONCENTRATION RISK flag
@@ -72,5 +87,5 @@ ANALYSIS RULES:
 - Equity < 40% for AGGRESSIVE risk appetite → underutilisation flag
 - Format AUM as ₹X,XX,XX,XXX (Indian comma notation)
 """,
-    tools=[get_portfolio_holdings, get_portfolio_performance],
+    tools=[get_portfolio_holdings, get_portfolio_performance, fetch_benchmark_returns],
 )

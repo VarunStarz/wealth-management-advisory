@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from google.adk.agents import Agent
 from config.settings import GEMINI_MODEL
-from tools.agent_tools import get_today_date
+from tools.agent_tools import get_today_date, fetch_india_inflation_forecast
 
 report_generation_agent = Agent(
     name="report_generation_agent",
@@ -31,6 +31,9 @@ You have received the complete structured outputs from:
 - CDD Agent (KYC status, PEP screening, risk tier)
 - EDD Agent (if applicable — open cases, source of wealth)
 - Income Validation Agent (declared vs inferred income, benchmarks)
+- Loans Agent (loan obligations, EMI burden, NPA/DPD status)
+- Expenditure Agent (card spend patterns, lifestyle tier, cash advance signals)
+- CIBIL Agent (credit score equivalent, credit health, AI forecast)
 - Portfolio Analysis Agent (holdings, performance, concentration)
 - Risk Assessment Agent (composite score, red flags, recommended action)
 
@@ -42,16 +45,28 @@ SCOPE-AWARE SECTION RENDERING:
  RISK_ONLY       → render all sections
  CDD_ONLY        → render client_snapshot, compliance_and_due_diligence,
                    and next_steps only.
-                   Set income_validation and portfolio_summary to null.
+                   Set income_validation, portfolio_summary, real_returns,
+                   loans_summary, expenditure_summary, cibil_summary to null.
  INCOME_ONLY     → render client_snapshot, income_validation,
                    and next_steps only.
-                   Set portfolio_summary to null.
- PORTFOLIO_ONLY  → render client_snapshot, portfolio_summary,
+                   Set portfolio_summary, real_returns, loans_summary,
+                   expenditure_summary, cibil_summary to null.
+ PORTFOLIO_ONLY  → render client_snapshot, portfolio_summary, real_returns,
                    and next_steps only.
-                   Set income_validation to null.
+                   Set income_validation, loans_summary,
+                   expenditure_summary, cibil_summary to null.
 
  For any omitted section, set its JSON value to null.
  Do NOT populate omitted sections with N/A placeholders.
+
+REAL RETURNS — MANDATORY STEP (for FULL_BRIEFING, PORTFOLIO_ONLY, RISK_ONLY):
+ Before writing the real_returns section, call fetch_india_inflation_forecast().
+ Use the CPI figure it returns to compute real returns:
+   real_return_pct = portfolio_nominal_return_pct − current_cpi_pct
+ Derive portfolio_nominal_return_pct from the portfolio analysis output:
+   if benchmark_comparison is available: use benchmark_cagr_3yr_pct + alpha as proxy
+   otherwise: use the portfolio's latest alpha as a conservative floor estimate
+ For the benchmark real return: benchmark_cagr_3yr_pct − current_cpi_pct
 
 YOUR OUTPUT — produce a single valid JSON object matching this exact schema.
 Output ONLY the JSON — no markdown, no code fences, no text before or after.
@@ -87,7 +102,8 @@ Output ONLY the JSON — no markdown, no code fences, no text before or after.
       { "source": "source label", "flag": "description" }
     ],
     "recommended_compliance_action": "STANDARD_REVIEW/ENHANCED_MONITORING/COMPLIANCE_ESCALATION",
-    "edd_summary": null
+    "edd_summary": null,
+    "income_growth_forecast": null
   },
   "income_validation": {
     "declared_annual_gross_inr": "",
@@ -95,7 +111,8 @@ Output ONLY the JSON — no markdown, no code fences, no text before or after.
     "market_benchmark_p50_inr": "",
     "discrepancy_pct": "",
     "discrepancy_status": "FLAGGED/CONSISTENT",
-    "signals": ["signal description"]
+    "signals": ["signal description"],
+    "employer_stability": null
   },
   "portfolio_summary": {
     "total_aum_inr": "",
@@ -120,6 +137,49 @@ Output ONLY the JSON — no markdown, no code fences, no text before or after.
     },
     "concentration_alerts": ["alert description"],
     "suitability_notes": ""
+  },
+  "loans_summary": {
+    "total_outstanding_inr":  "",
+    "total_monthly_emi_inr":  "",
+    "liability_count":        0,
+    "npa_flag":               false,
+    "dpd_flag":               false,
+    "npa_accounts":           [],
+    "dpd_accounts":           [],
+    "red_flags":              [],
+    "loans_summary":          ""
+  },
+  "expenditure_summary": {
+    "total_monthly_spend_inr":  "",
+    "cash_advance_flag":        false,
+    "cash_advance_count":       0,
+    "minimum_payment_months":   0,
+    "dpd_months":               0,
+    "lifestyle_tier":           "AFFLUENT|MODERATE|STRESSED",
+    "red_flags":                [],
+    "expenditure_summary":      ""
+  },
+  "cibil_summary": {
+    "risk_score":       0,
+    "cibil_equivalent": 0,
+    "risk_tier":        "LOW|MEDIUM|HIGH|VERY_HIGH",
+    "credit_health":    "EXCELLENT|GOOD|FAIR|POOR|CRITICAL",
+    "kyc_status":       "",
+    "re_kyc_due":       null,
+    "ai_forecast":      "",
+    "red_flags":        [],
+    "cibil_summary":    ""
+  },
+  "real_returns": {
+    "portfolio_nominal_return_pct": 0,
+    "cpi_inflation_pct":            0,
+    "real_return_pct":              0,
+    "benchmark_cagr_pct":          0,
+    "real_benchmark_pct":          0,
+    "risk_preference_tier":        "NO_RISK|LOW|MEDIUM|HIGH",
+    "verdict":                     "REAL_POSITIVE|INFLATION_ERODING|BELOW_INFLATION",
+    "inflation_source":            "",
+    "note":                        ""
   },
   "next_steps": [
     "Step 1 description",
@@ -157,7 +217,14 @@ OUTPUT RULES:
 - Use Indian number formatting for all currency strings: Rs.1,25,00,000 (not 12500000)
 - Never recommend a specific investment product
 - Cite specific case IDs, document references, and dates wherever available
-- If EDD was not triggered, set edd_summary to null
+- Copy employer_stability from the income validation agent output verbatim into
+  income_validation.employer_stability (fields: employer_name, listed_on_exchange,
+  stability_rating, stability_notes). Set to null if the income validation agent
+  returned null (no income proofs on file or self-employed with no employer record)
+- If EDD was not triggered, set edd_summary to null and income_growth_forecast to null
+- If EDD ran, copy the income_growth_forecast block from the EDD agent output verbatim into
+  compliance_and_due_diligence.income_growth_forecast (fields: projected_growth_rate_pct,
+  career_stage, sector_note, consistency_assessment)
 - If any data is missing or unavailable, use null for that field — never fabricate
 
 RED FLAG SOURCE LABELLING BY SCOPE:
@@ -179,7 +246,9 @@ RED FLAG SOURCE LABELLING BY SCOPE:
    "SYSTEM"         -> cross-signal observations made by the risk
                        assessment agent from multiple sources
    "CIBIL"          -> credit score and payment behaviour signals
+   "LOANS"          -> findings from the loans agent (NPA, DPD, EMI burden)
+   "EXPENDITURE"    -> findings from the expenditure agent (cash advances, lifestyle stress)
 - Keep language professional, factual, and directly useful to the RM
 """,
-    tools=[get_today_date],
+    tools=[get_today_date, fetch_india_inflation_forecast],
 )

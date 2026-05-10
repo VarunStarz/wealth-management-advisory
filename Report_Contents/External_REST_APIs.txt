@@ -1,0 +1,163 @@
+EXTERNAL REST APIs — WEALTH ADVISORY INTELLIGENCE PLATFORM
+==========================================================
+All external API calls are in: tools/agent_tools.py
+No API keys required for any of the 6 data sources.
+The only keyed API is Google Gemini (GOOGLE_API_KEY) used by all agents.
+
+
+──────────────────────────────────────────────────────────────────────────────
+1. Yahoo Finance — Nifty 500 (^CNX500)
+──────────────────────────────────────────────────────────────────────────────
+URL       : https://query1.finance.yahoo.com/v8/finance/chart/^CNX500?range=3y&interval=1mo
+Function  : fetch_benchmark_returns(risk_tier="MEDIUM")
+Phase     : Phase 2 — Risk preference screen + benchmark returns
+
+Why selected:
+  The MEDIUM risk tier benchmark is the Nifty 500 Index, which represents the
+  broad Indian market (top 500 companies by market cap). Yahoo Finance is the
+  most accessible free source for live Indian index historical price data
+  without requiring a paid subscription. The 3-year monthly close series is
+  fetched to compute the CAGR, giving the RM a live, data-driven benchmark
+  return rather than a hardcoded estimate.
+
+Fallback  : Hardcoded 12.5% (historical Nifty 500 long-run average) if call fails.
+Auth      : None required. Intermittent HTTP 404/429 due to bot-rate-limiting.
+
+
+──────────────────────────────────────────────────────────────────────────────
+2. Yahoo Finance — Nifty 50 (^NSEI)
+──────────────────────────────────────────────────────────────────────────────
+URL       : https://query1.finance.yahoo.com/v8/finance/chart/^NSEI?range=3y&interval=1mo
+Function  : fetch_benchmark_returns(risk_tier="HIGH")
+Phase     : Phase 2 — Risk preference screen + benchmark returns
+
+Why selected:
+  The HIGH risk tier benchmark is the Nifty 50 Index, the flagship large-cap
+  concentrated Indian equity index. It is the standard benchmark used by
+  aggressive equity funds and is the most recognised index for high-risk
+  portfolios in India. Same Yahoo Finance source as above for consistency.
+
+Fallback  : Hardcoded 15.0% (historical Nifty 50 long-run average) if call fails.
+Auth      : None required. Same rate-limiting behaviour as above.
+
+Note      : NO_RISK (7.1% FD rate) and LOW (7.5% liquid fund) tiers use
+            hardcoded RBI-regulated averages and do not call any external API.
+
+
+──────────────────────────────────────────────────────────────────────────────
+3. World Bank Open Data API — India CPI Inflation
+──────────────────────────────────────────────────────────────────────────────
+URL       : https://api.worldbank.org/v2/country/IND/indicator/FP.CPI.TOTL.ZG
+            ?format=json&mrv=5&per_page=5
+Function  : fetch_india_inflation_forecast()
+Phase     : Phase 3 — Inflation-adjusted (real) returns
+
+Why selected:
+  To compute real (inflation-adjusted) portfolio returns, the platform needs
+  India's CPI inflation rate. The World Bank Open Data API publishes official
+  country-level CPI data (indicator FP.CPI.TOTL.ZG) as a structured, versioned
+  REST endpoint — the same data used by economists and regulators globally.
+  The last 5 years of data are fetched; the most recent year is used as the
+  current CPI and the 5-year average is used as the forecast proxy.
+
+Fallback  : Hardcoded CPI 4.5% (RBI MPC projection) if call fails.
+Auth      : None required. Fully public API, generally stable.
+
+
+──────────────────────────────────────────────────────────────────────────────
+4. IMF DataMapper API — India GDP Growth (used in real returns)
+──────────────────────────────────────────────────────────────────────────────
+URL       : https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/IND
+Function  : fetch_india_inflation_forecast()
+Phase     : Phase 3 — Inflation-adjusted (real) returns
+
+Why selected:
+  The IMF World Economic Outlook (WEO) is the global standard reference for
+  country-level GDP growth projections. The indicator NGDP_RPCH/IND gives
+  India's real GDP growth rate, which is used alongside CPI to provide the
+  RM with a complete macroeconomic context for the real returns panel
+  (portfolio real return vs. GDP growth backdrop).
+
+Fallback  : Hardcoded 7.2% (RBI/IMF consensus estimate) if call fails.
+Auth      : None required. Returns HTTP 403 intermittently (rate-limited).
+
+
+──────────────────────────────────────────────────────────────────────────────
+5. IMF DataMapper API — India GDP Growth (used in income forecast)
+──────────────────────────────────────────────────────────────────────────────
+URL       : https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/IND
+Function  : forecast_income_growth()
+Phase     : Phase 4 — Income growth forecast (EDD agent)
+
+Why selected:
+  The income growth forecast for EDD cases anchors expected career-linked
+  income progression to India's nominal GDP growth rate. The logic is that
+  in a growing economy, a reasonable professional's income should grow at
+  roughly GDP rate, adjusted upward or downward by a career-stage multiplier
+  and sector premium. IMF NGDP_RPCH is the most authoritative free source
+  for this base rate, making the forecast credible for compliance use.
+
+Fallback  : Hardcoded 7.2% GDP base if call fails.
+Auth      : None required. Same endpoint as #4 above.
+
+
+──────────────────────────────────────────────────────────────────────────────
+6. NSE India — EQUITY_L.csv (Listed Companies)
+──────────────────────────────────────────────────────────────────────────────
+URL       : https://archives.nseindia.com/content/equities/EQUITY_L.csv
+Function  : validate_employer_stability()
+Phase     : Phase 5 — Employer stability validation
+
+Why selected:
+  To assess whether a client's employer is a financially stable, regulated
+  entity, the platform checks if the employer is listed on the National Stock
+  Exchange (NSE). NSE publishes a complete, daily-updated CSV of all
+  NSE-listed companies (EQUITY_L.csv) as a free download. A name match in
+  this file confirms the employer is exchange-listed, which is the strongest
+  publicly verifiable signal of institutional stability and regulatory
+  oversight (SEBI-compliant, audited financials, public disclosures).
+  If the employer is not listed, name-pattern heuristics classify the entity
+  type (LLP, Pvt Ltd, etc.) for a secondary stability rating.
+
+Fallback  : Name-pattern heuristics (LLP → MEDIUM, unlisted Pvt Ltd → MEDIUM,
+            unrecognised → UNKNOWN) if NSE CSV download fails.
+Auth      : None required. NSE blocks non-browser User-Agents intermittently;
+            the code sends Mozilla/5.0 User-Agent header as a workaround.
+
+
+──────────────────────────────────────────────────────────────────────────────
+7. Google Gemini (via Google ADK) — LLM for all agents
+──────────────────────────────────────────────────────────────────────────────
+Used by   : All 9 agents (client_360, cdd, income_validation, edd,
+            portfolio_analysis, loans, expenditure, cibil, risk_assessment,
+            report_generation)
+Config    : GOOGLE_API_KEY in config/settings.py (loaded from environment)
+Phase     : Core infrastructure — all phases
+
+Why selected:
+  Google ADK (Agent Development Kit) with Gemini is the orchestration
+  framework for the entire multi-agent pipeline. Each agent is a Gemini
+  LLM instance with tool access to the PostgreSQL databases. Gemini was
+  chosen for its function-calling capability, long context window, and
+  native ADK integration.
+
+Auth      : GOOGLE_API_KEY required. Must be set in environment before
+            running api_server.py or main.py.
+
+
+==========================================================
+FALLBACK SUMMARY
+==========================================================
+All 6 data APIs have hardcoded fallbacks. The pipeline never fails due to
+an unreachable external data source. Only Google Gemini (item 7) is a hard
+dependency — if the API key is missing or quota is exhausted, the pipeline
+will not run.
+
+  API                  | Fallback value
+  ---------------------|------------------------------------------
+  Yahoo Finance MEDIUM | 12.5% CAGR (Nifty 500 historical average)
+  Yahoo Finance HIGH   | 15.0% CAGR (Nifty 50 historical average)
+  World Bank CPI       | 4.5% (RBI MPC projection)
+  IMF GDP (returns)    | 7.2% (RBI/IMF consensus)
+  IMF GDP (income)     | 7.2% (RBI/IMF consensus)
+  NSE EQUITY_L.csv     | Name-pattern heuristics

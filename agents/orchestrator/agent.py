@@ -10,12 +10,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from google.adk.agents import Agent
 from config.settings import GEMINI_MODEL
 
-from agents.client_360.agent       import client_360_agent
-from agents.cdd.agent              import cdd_agent
-from agents.edd.agent              import edd_agent
+from agents.client_360.agent        import client_360_agent
+from agents.cdd.agent               import cdd_agent
+from agents.edd.agent               import edd_agent
 from agents.income_validation.agent import income_validation_agent
 from agents.portfolio_analysis.agent import portfolio_analysis_agent
-from agents.risk_assessment.agent  import risk_assessment_agent
+from agents.loans.agent             import loans_agent
+from agents.expenditure.agent       import expenditure_agent
+from agents.cibil.agent             import cibil_agent
+from agents.risk_assessment.agent   import risk_assessment_agent
 from agents.report_generation.agent import report_generation_agent
 
 orchestrator_agent = Agent(
@@ -23,8 +26,8 @@ orchestrator_agent = Agent(
     model=GEMINI_MODEL,
     description=(
         "Master orchestrator for the Wealth Management Advisory Intelligence Platform. "
-        "Coordinates the full five-layer pipeline after the Guardrail Agent has "
-        "approved the query: Client 360 → CDD / EDD (conditional) / Income Validation "
+        "Coordinates the full pipeline after the Guardrail Agent has approved the query: "
+        "Client 360 → CDD / EDD (conditional) / Income Validation / Loans / Expenditure / CIBIL "
         "→ Portfolio Analysis + Risk Assessment → Report Generation."
     ),
     instruction="""
@@ -45,25 +48,33 @@ STEP 1 — IDENTITY & PROFILE (mandatory, always first)
   The identity_map MUST be passed to every downstream agent.
   If customer_id is not found in CBS → stop, return error to RM.
 
-STEP 2 — DUE DILIGENCE (run in parallel where possible)
-  Always run:
-    → cdd_agent              (KYC, PEP, sanctions)
-    → income_validation_agent (declared vs inferred income)
+STEP 2 — DUE DILIGENCE & FINANCIAL ANALYSIS (run in parallel where possible)
+  Always run for FULL_BRIEFING and RISK_ONLY:
+    → cdd_agent               (KYC, PEP, sanctions)
+    → income_validation_agent  (declared vs inferred income)
+    → loans_agent              (loan obligations, EMI burden, NPA/DPD status)
+    → expenditure_agent        (card spend patterns, lifestyle signals, cash advances)
+    → cibil_agent              (credit score, credit health, AI forecast)
+
+  For CDD_ONLY: run only cdd_agent
+  For INCOME_ONLY: run only income_validation_agent
+  For PORTFOLIO_ONLY: skip Step 2 entirely
 
   Run ONLY IF cdd_agent returns edd_trigger = true:
     → edd_agent              (open EDD cases, source of wealth, ext. bank stmts)
-  
+
   If cdd_agent returns cdd_status = "FAIL" (sanctions hit):
     → STOP the pipeline immediately
-    → Return: "COMPLIANCE BLOCK: This client has a sanctions hit. 
-               Advisory relationship cannot proceed. 
+    → Return: "COMPLIANCE BLOCK: This client has a sanctions hit.
+               Advisory relationship cannot proceed.
                Refer immediately to Compliance."
 
 STEP 3 — ANALYSIS (run after Step 2 completes)
   Always run:
     → portfolio_analysis_agent  (holdings, performance, concentration)
     → risk_assessment_agent     (composite 360° score, red flags)
-  Pass ALL Step 2 outputs to risk_assessment_agent as context.
+  Pass ALL Step 2 outputs — including loans, expenditure, and CIBIL — to
+  risk_assessment_agent as context for compound risk detection.
 
 STEP 4 — SYNTHESIS (always last)
   Delegate to: report_generation_agent
@@ -93,6 +104,9 @@ ORCHESTRATION RULES
         cdd_agent,
         edd_agent,
         income_validation_agent,
+        loans_agent,
+        expenditure_agent,
+        cibil_agent,
         portfolio_analysis_agent,
         risk_assessment_agent,
         report_generation_agent,

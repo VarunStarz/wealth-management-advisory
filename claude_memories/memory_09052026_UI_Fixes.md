@@ -150,8 +150,110 @@ function getCheckStatus(src, high, medium) {
 | `ui/src/components/ComplianceSection.jsx` | Added compliance checklist with tick/cross icons |
 | PMS DB (live) | Fixed PORT000009 holdings market_value + weight_pct |
 
-## 7. Nothing Committed This Session
-User requested no git operations without explicit approval.
+## 7. Committed and Pushed
+Commit `ba55cb2` pushed to `origin/main`.
+
+**Files in commit:**
+- `agents/income_validation/agent.py`
+- `ui/src/components/RiskPanel.jsx`
+- `ui/src/components/ComplianceSection.jsx`
+- `database/dumps/*.sql` — all 6 dumps re-generated via `python scripts/dump_databases.py`
+- `claude_memories/memory_09052026_FastAPI_UI.md`
+- `claude_memories/memory_09052026_UI_Fixes.md`
+
+**Note:** `scripts/.pids` was intentionally excluded (runtime process ID file, not source).
+
+---
+
+## 8. Approved Implementation Plan — 9-Point Enhancement
+
+Plan file: `C:\Users\saico\.claude\plans\eager-sparking-reef.md`
+User approved: 09 May 2026. Implementation NOT yet started (interrupted).
+
+### Phase 1 — Wire Existing Agents (#1 Loans, #2 Expenditure, #8 CIBIL)
+**Status: COMPLETE (09 May 2026)**
+- `agents/orchestrator/agent.py` — imports added, sub_agents updated, STEP 2 updated with scope rules
+- `agents/report_generation/agent.py` — 3 new JSON sections; scope nulling; LOANS/EXPENDITURE source labels
+- `agents/risk_assessment/agent.py` — 4 compound credit/lifestyle patterns; updated source label list
+- New: `ui/src/components/LoansPanel.jsx` — NPA/DPD badges, EMI, outstanding, red flags
+- New: `ui/src/components/ExpenditurePanel.jsx` — lifestyle tier badge, spend, cash advances
+- New: `ui/src/components/CIBILPanel.jsx` — CIBIL score (300–900), credit health, AI forecast
+- `ui/src/App.jsx` — imports added; panels rendered after `<PortfolioSummary>`
+- `ui/src/components/ComplianceSection.jsx` — LOANS + EXPENDITURE added to CANONICAL_CHECKS
+- No DB changes needed: CUST000009 has card data (CARD00000009, ₹1.8L/mo spend, 0 DPD, full payments); no liability_accounts rows (debt-free UHNI, correct)
+
+### Phase 2 — Risk Preference Screen + Benchmark Returns (#5, #6)
+**Status: COMPLETE (09 May 2026)**
+- New: `ui/src/components/RiskPreferenceSelector.jsx` — 4-card selector; Skip→MEDIUM; onSelect/onSkip callbacks
+- `ui/src/App.jsx` — `pending` state captures {query, rmId}; selector shown between form submit and pipeline; `runPipeline(query, rmId, riskPreference)` sends risk_preference in POST body
+- `api_server.py` — `risk_preference` field (default MEDIUM, validated to enum) added to QueryRequest; passed to process_rm_query
+- `main.py` — `risk_preference` param threaded through process_rm_query → run_pipeline → _run_portfolio prompt + report_generation prompt
+- `tools/agent_tools.py` — `fetch_benchmark_returns(risk_tier)`: NO_RISK=7.1% / LOW=7.5% hardcoded; MEDIUM=^CNX500 / HIGH=^NSEI from Yahoo Finance with 3yr CAGR; urllib (stdlib, no requests dep); graceful fallback
+- `agents/portfolio_analysis/agent.py` — fetch_benchmark_returns added to tools; Step 3 calls it; benchmark_comparison added to output schema
+- No DB changes needed (risk_preference is runtime-only, never persisted)
+
+### Phase 3 — Inflation-Adjusted Returns (#7)
+**Status: COMPLETE (09 May 2026)**
+- `tools/agent_tools.py` — `fetch_india_inflation_forecast()`: World Bank CPI API → most recent year as current_cpi_pct, 5yr avg as forecast; IMF DataMapper NGDP_RPCH/IND for GDP; both have urllib fallback (CPI 4.5%, GDP 7.2%)
+- `agents/report_generation/agent.py` — fetch_india_inflation_forecast imported + added to tools; instruction updated with mandatory call rule + real_return derivation formula; `real_returns` section added to briefing JSON schema; scope rules updated (null for CDD_ONLY / INCOME_ONLY)
+- New: `ui/src/components/RealReturnsPanel.jsx` — CPI callout, dual-bar chart (grey=nominal, coloured=real), portfolio + benchmark rows, verdict badge (REAL_POSITIVE / INFLATION_ERODING / BELOW_INFLATION)
+- `ui/src/App.jsx` — RealReturnsPanel imported; rendered between PortfolioSummary and LoansPanel
+- No DB changes needed
+
+### Phase 4 — EDD Income Intelligence (#3, #4)
+**Status: COMPLETE (09 May 2026)**
+- `tools/agent_tools.py` — `benchmark_income()` expanded from 6 → 62 entries; 9 sectors, 15 cities; source updated to "PLFS 2023-24 + EY/Aon India Salary Survey 2024"
+- `tools/agent_tools.py` — `forecast_income_growth(role, industry, city, age, experience_years)`: IMF GDP base (urllib, fallback 7.2%); career multiplier: 1.3× (≤35), 1.1× (≤45), 0.9× (≤55), 0.7× (55+); sector premium: +2% (Tech/Finance/Legal/Pharma/Healthcare), 0% (Govt/Education), −1% (Retail/Manufacturing/Media), +0.5% (Diversified)
+- `agents/edd/agent.py` — forecast_income_growth imported + added to tools; Step 4 added: derives role/industry/city/age/exp from identity map; cross-references projected growth vs declared income trajectory; income_growth_forecast block added to output schema with consistency_assessment field
+
+### Phase 5 — Employer Stability (#9)
+**Status: COMPLETE (09 May 2026)**
+- `tools/agent_tools.py` — `get_declared_income()` updated to surface `employer_name` from most recent income_proofs row (column already exists in DMS schema, no DB change needed)
+- `tools/agent_tools.py` — `validate_employer_stability(employer_name)`: Source 1 = NSE EQUITY_L.csv via urllib (normalised substring match on NAME OF COMPANY); Source 2 = name-pattern heuristics (Ltd→HIGH, LLP→MEDIUM, Pvt Ltd→MEDIUM, &Sons/Trading→LOW, unknown→UNKNOWN); graceful fallback; production note for MCA21 replacement
+- `agents/income_validation/agent.py` — validate_employer_stability imported + added to tools; Step 4 added (call only if employer_name non-empty; skip for self-employed/DATA_GAP); employer_stability block added to output schema; step numbering shifted (detect_income_discrepancy→Step 5, return→Step 6)
+- No DB changes needed
+
+### Phase 6 — CIBIL Forecasting Enhancement (#8)
+**Status: COMPLETE (09 May 2026)**
+- `tools/agent_tools.py` — `get_cibil_credit_profile()` rewritten: added 5 multi-factor fields: payment_history_score (0–100, derived from DPD/min-pay months), credit_utilisation_pct (sum balance/limit), credit_age_years (from CBS customer_since), credit_mix_score (0/40/70/100 by account type count), derogatory_marks (npa_count + dpd_severe_count); also surfaces dpd_card_months, minimum_payment_months, npa_count, dpd_severe_count
+- `agents/cibil/agent.py` — instruction updated with multi-factor forecast rules: DETERIORATING (payment_history <70 AND utilisation >80, any derogatory_marks, dpd_card_months >3), STABLE (payment 70–89, utilisation 30–79, no derogatory), IMPROVING (credit_age >10yr + utilisation <30 + no marks); composite rules for thin files, NPA override, payment stress; ai_forecast must cite actual numeric values; output schema extended with forecast_direction + all 5 new multi-factor fields
+- No DB changes needed — all fields derived from existing CARD, CBS, KYC tables
+
+### New Files to Create
+| File | Purpose |
+|------|---------|
+| `ui/src/components/LoansPanel.jsx` | Loans UI panel |
+| `ui/src/components/ExpenditurePanel.jsx` | Expenditure UI panel |
+| `ui/src/components/CIBILPanel.jsx` | CIBIL UI panel |
+| `ui/src/components/RiskPreferenceSelector.jsx` | Separate risk preference step screen |
+
+### User Preferences Confirmed
+- Public data: **External REST APIs** (Yahoo Finance, World Bank, NSE CSV, MCA21)
+- Risk preference UI: **Separate screen** between query and pipeline run
+- Build order: **All 9 points** implemented sequentially by phase
+
+---
+
+## 9. Testing Status (09 May 2026)
+
+Testing guide saved to: `claude_memories/testing_guide_9_points_09052026.md`
+
+**Status: PENDING — Gemini API rate limit hit. Testing deferred to next session.**
+
+### Code bug fixed during DB verification (Phase 6):
+- `tools/agent_tools.py` — `get_cibil_credit_profile()` query used `WHERE status = 'ACTIVE'`
+  but `card_accounts` column is named `card_status`. Fixed to `WHERE card_status = 'ACTIVE'`.
+
+### Testing plan summary:
+1. Tool smoke test (no Gemini needed) — run first
+2. Scenario 4 (CUST000009 FULL_BRIEFING, MEDIUM risk) — exercises all 6 phases in one run
+3. Scenario 2 (CUST000005 EDD) — verifies income_growth_forecast in EDD section
+4. Scenario 5 (CUST000002 PORTFOLIO_ONLY) — verifies null-state panels don't crash
+5. Scenario 1 (CUST000001) × 2 with NO_RISK + HIGH_RISK — verifies benchmark_cagr_pct differs
+6. Scenario 6 (BLOCKED) — verifies blocked flow still works
+
+### Nothing committed yet — all changes are local, uncommitted.
+User instruction: **Always ask before any git commands.**
 
 ---
 

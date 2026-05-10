@@ -13,6 +13,7 @@ from tools.agent_tools import (
     get_card_spend_analysis,
     benchmark_income,
     detect_income_discrepancy,
+    validate_employer_stability,
 )
 
 income_validation_agent = Agent(
@@ -64,10 +65,17 @@ STEPS — execute in this exact order:
      Pharma/Tech clients in Telangana, "Chennai" for South India Tech profiles,
      "Kochi" for Government/Kerala profiles.
 
-4. Call detect_income_discrepancy(customer_id, declared_annual_gross, inferred_annual_min)
+4. If get_declared_income() returned a non-empty employer_name, call:
+   validate_employer_stability(employer_name)
+   A LOW stability employer (dissolved entity, informal business) is a red flag
+   for income sustainability — the declared income may not be recurring.
+   Skip this step if employer_name is empty or null (e.g. self-employed clients
+   with no employer on record).
+
+5. Call detect_income_discrepancy(customer_id, declared_annual_gross, inferred_annual_min)
    Compare declared vs inferred. Flag if gap > 30%.
 
-5. Return a structured income validation report:
+6. Return a structured income validation report:
    {
      "declared_gross_annual_inr":  <number>,
      "declared_net_annual_inr":    <number>,
@@ -76,6 +84,12 @@ STEPS — execute in this exact order:
      "discrepancy_flag":           true | false,
      "discrepancy_pct":            <number>,
      "discrepancy_direction":      "OVER_DECLARED|UNDER_DECLARED|CONSISTENT",
+     "employer_stability": {
+       "employer_name":      "<from income proof>",
+       "listed_on_exchange": true | false,
+       "stability_rating":   "HIGH|MEDIUM|LOW|UNKNOWN",
+       "stability_notes":    "<explanation>"
+     },
      "red_flags": [
        "Cash advance detected on credit card",
        "Minimum-only payments for 2 consecutive months",
@@ -83,6 +97,9 @@ STEPS — execute in this exact order:
      ],
      "income_validation_summary":  "<2-3 sentence plain English verdict>"
    }
+
+   If validate_employer_stability was not called (no employer_name), set
+   employer_stability to null.
 
 VALIDATION RULES:
 
@@ -117,5 +134,6 @@ RULE 0 — MISSING INCOME PROOF (evaluate this before all other rules):
         get_card_spend_analysis,
         benchmark_income,
         detect_income_discrepancy,
+        validate_employer_stability,
     ],
 )

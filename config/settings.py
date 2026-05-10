@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Gemini model ─────────────────────────────────────────────
-GEMINI_MODEL   = "gemini-3-pro-preview"
+#GEMINI_MODEL   = "gemini-3-pro-preview"
+GEMINI_MODEL   = "gemini-3.1-pro-preview"
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 # ── PostgreSQL connection configs ────────────────────────────

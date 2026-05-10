@@ -33,7 +33,9 @@ const CANONICAL_CHECKS = [
   { src: 'EDD',       label: 'Enhanced Due Diligence' },
   { src: 'PORTFOLIO', label: 'Portfolio Suitability'  },
   { src: 'INCOME',    label: 'Income Validation'      },
-  { src: 'CIBIL',     label: 'Credit Health'          },
+  { src: 'CIBIL',       label: 'Credit Health'         },
+  { src: 'LOANS',       label: 'Loan Obligations'      },
+  { src: 'EXPENDITURE', label: 'Spending & Lifestyle'  },
 ];
 
 const CHECK_STYLE = {
@@ -199,6 +201,44 @@ export default function ComplianceSection({ data }) {
             </div>
           </>
         )}
+
+        {/* ── 4. Income growth forecast (EDD phase) ── */}
+        {data.income_growth_forecast && (() => {
+          const igf = data.income_growth_forecast;
+          const assessmentStyle = {
+            CONSISTENT:      { bg: 'bg-green-50',  border: 'border-green-200', badge: 'bg-green-100 text-green-700' },
+            FLAG_FOR_REVIEW: { bg: 'bg-amber-50',  border: 'border-amber-200', badge: 'bg-amber-100 text-amber-700' },
+            DISCREPANCY:     { bg: 'bg-red-50',    border: 'border-red-200',   badge: 'bg-red-100 text-red-700'     },
+          }[igf.consistency_assessment] ?? { bg: 'bg-slate-50', border: 'border-slate-200', badge: 'bg-slate-100 text-slate-600' };
+          return (
+            <>
+              <div className="border-t border-slate-100" />
+              <div className={`${assessmentStyle.bg} border ${assessmentStyle.border} rounded-xl p-4`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    Income Growth Forecast
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${assessmentStyle.badge}`}>
+                    {igf.consistency_assessment?.replace(/_/g, ' ')}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide mb-0.5">Projected Growth</div>
+                    <div className="text-lg font-bold text-slate-800">{igf.projected_growth_rate_pct?.toFixed(1)}%<span className="text-xs font-normal text-slate-500 ml-1">p.a.</span></div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide mb-0.5">Career Stage</div>
+                    <div className="text-sm font-medium text-slate-700">{igf.career_stage}</div>
+                  </div>
+                </div>
+                {igf.sector_note && (
+                  <p className="text-xs text-slate-500 mt-2 leading-relaxed">{igf.sector_note}</p>
+                )}
+              </div>
+            </>
+          );
+        })()}
 
       </div>
     </div>

@@ -69,6 +69,39 @@ export default function IncomeValidation({ data }) {
             </ul>
           </div>
         )}
+
+        {data.employer_stability && (() => {
+          const es = data.employer_stability;
+          const ratingStyle = {
+            HIGH:    { badge: 'bg-green-100 text-green-700',  border: 'border-green-200' },
+            MEDIUM:  { badge: 'bg-amber-100 text-amber-700',  border: 'border-amber-200' },
+            LOW:     { badge: 'bg-red-100 text-red-700',      border: 'border-red-200'   },
+            UNKNOWN: { badge: 'bg-slate-100 text-slate-500',  border: 'border-slate-200' },
+          }[es.stability_rating] ?? { badge: 'bg-slate-100 text-slate-500', border: 'border-slate-200' };
+          return (
+            <div className={`border-t border-slate-100 pt-4`}>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Employer Stability</div>
+              <div className={`border ${ratingStyle.border} rounded-xl p-4 space-y-3`}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-semibold text-slate-800">{es.employer_name}</span>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {es.listed_on_exchange && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 uppercase tracking-wide">
+                        Listed
+                      </span>
+                    )}
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${ratingStyle.badge}`}>
+                      {es.stability_rating}
+                    </span>
+                  </div>
+                </div>
+                {es.stability_notes && (
+                  <p className="text-xs text-slate-500 leading-relaxed">{es.stability_notes}</p>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

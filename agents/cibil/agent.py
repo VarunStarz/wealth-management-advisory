@@ -31,13 +31,19 @@ STEPS — execute in this exact order:
 
 2. Return a structured CIBIL/credit analysis:
    {
-     "risk_score":         <0–100>,
-     "cibil_equivalent":   <300–900>,
-     "risk_tier":          "LOW | MEDIUM | HIGH | VERY_HIGH",
-     "credit_health":      "EXCELLENT | GOOD | FAIR | POOR | CRITICAL",
-     "kyc_status":         "...",
-     "re_kyc_due":         "<date or null>",
-     "ai_forecast":        "<forward-looking credit outlook — 1-2 sentences>",
+     "risk_score":              <0–100>,
+     "cibil_equivalent":        <300–900>,
+     "risk_tier":               "LOW | MEDIUM | HIGH | VERY_HIGH",
+     "credit_health":           "EXCELLENT | GOOD | FAIR | POOR | CRITICAL",
+     "kyc_status":              "...",
+     "re_kyc_due":              "<date or null>",
+     "payment_history_score":   <0–100>,
+     "credit_utilisation_pct":  <0–100>,
+     "credit_age_years":        <number>,
+     "credit_mix_score":        <0–100>,
+     "derogatory_marks":        <integer>,
+     "ai_forecast":             "<forward-looking credit outlook — 2-3 sentences>",
+     "forecast_direction":      "IMPROVING | STABLE | DETERIORATING",
      "red_flags": [
        "<e.g. CIBIL equivalent below 600 — critical credit health>",
        "<e.g. Re-KYC overdue — may affect borrowing capacity>"
@@ -52,11 +58,35 @@ CREDIT HEALTH MAPPING (CIBIL equivalent):
 - 600–649 → POOR
 - 300–599 → CRITICAL
 
-AI FORECAST GUIDANCE:
-- If CRITICAL and re-KYC overdue → forecast further deterioration unless corrective action taken
-- If FAIR and no DPD → forecast stable with minor improvement possible
-- If EXCELLENT with no red flags → forecast continued strong credit standing
-- Always anchor forecast to current data signals, not assumptions
+AI FORECAST GUIDANCE — use the multi-factor signals from get_cibil_credit_profile:
+
+DETERIORATION signals (set forecast_direction = "DETERIORATING"):
+- payment_history_score < 70 AND credit_utilisation_pct > 80 → strong deterioration signal
+- derogatory_marks > 0 (any NPA or DPD > 90 days) → flag as high deterioration risk
+- credit_utilisation_pct > 90 → maxed-out credit, elevated default probability
+- dpd_card_months > 3 → persistent payment stress, downgrade likely
+- CRITICAL credit_health AND re_kyc_due is overdue → double risk flag
+
+STABLE signals (set forecast_direction = "STABLE"):
+- payment_history_score 70–89 AND credit_utilisation_pct 30–79 AND derogatory_marks == 0
+- FAIR credit_health with no DPD months and utilisation < 50% → minor improvement possible
+- credit_age_years > 5 with no derogatory marks → seasoned credit history, stable outlook
+
+IMPROVING signals (set forecast_direction = "IMPROVING"):
+- credit_age_years > 10 AND derogatory_marks == 0 AND credit_utilisation_pct < 30 → strong improving signal
+- payment_history_score >= 90 AND credit_utilisation_pct < 30 → EXCELLENT trajectory
+- credit_mix_score >= 70 AND no derogatory_marks → diverse, well-managed credit portfolio
+- EXCELLENT credit_health with no red flags → forecast continued strong credit standing
+
+COMPOSITE RULES (multiple factors together):
+- If payment_history_score < 70 AND minimum_payment_months > 2: mention payment stress pattern
+- If credit_utilisation_pct > 80 AND derogatory_marks > 0 AND dpd_severe_count > 0: flag as CRITICAL deterioration — recommend immediate intervention
+- If credit_age_years < 2 AND credit_mix_score < 40: flag as thin credit file — limited predictive confidence
+- If npa_count > 0: always flag as DETERIORATING regardless of other signals
+
+Always anchor the ai_forecast narrative to the specific numeric values returned (e.g.
+"With a payment history score of 92/100 and utilisation at 18%, ..."). Do not give
+generic advice — cite actual figures from the profile.
 """,
     tools=[get_cibil_credit_profile],
 )

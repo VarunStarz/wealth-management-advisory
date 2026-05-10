@@ -7,8 +7,13 @@ import ClientSnapshot    from './components/ClientSnapshot.jsx';
 import RiskPanel         from './components/RiskPanel.jsx';
 import ComplianceSection from './components/ComplianceSection.jsx';
 import IncomeValidation  from './components/IncomeValidation.jsx';
-import PortfolioSummary  from './components/PortfolioSummary.jsx';
-import NextSteps         from './components/NextSteps.jsx';
+import PortfolioSummary        from './components/PortfolioSummary.jsx';
+import LoansPanel              from './components/LoansPanel.jsx';
+import ExpenditurePanel        from './components/ExpenditurePanel.jsx';
+import CIBILPanel              from './components/CIBILPanel.jsx';
+import NextSteps               from './components/NextSteps.jsx';
+import RiskPreferenceSelector  from './components/RiskPreferenceSelector.jsx';
+import RealReturnsPanel        from './components/RealReturnsPanel.jsx';
 
 const BASE     = 'http://localhost:8000';
 const RM_IDS   = ['RM_USER', 'RM001', 'RM002', 'RM003', 'RM004', 'RM005'];
@@ -246,14 +251,24 @@ function ErrorView({ message, onReset }) {
 
 // ── Main App ──────────────────────────────────────────────────
 export default function App() {
-  const [briefing, setBriefing] = useState(null);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState('');
+  const [briefing,    setBriefing]    = useState(null);
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState('');
+  // pending holds { query, rmId } while the risk preference screen is shown
+  const [pending,     setPending]     = useState(null);
 
-  const handleSubmit = async (query, rmId) => {
+  // Step 1: query form submitted → show risk preference screen
+  const handleSubmit = (query, rmId) => {
+    setBriefing(null);
+    setError('');
+    setPending({ query, rmId });
+  };
+
+  // Step 2a: risk preference chosen (or skipped) → run pipeline
+  const runPipeline = async (query, rmId, riskPreference) => {
+    setPending(null);
     setLoading(true);
     setError('');
-    setBriefing(null);
 
     const controller = new AbortController();
     const timeout    = setTimeout(() => controller.abort(), 360_000); // 6 min
@@ -262,7 +277,7 @@ export default function App() {
       const res = await fetch(`${BASE}/api/query`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ query, rm_id: rmId }),
+        body:    JSON.stringify({ query, rm_id: rmId, risk_preference: riskPreference }),
         signal:  controller.signal,
       });
       clearTimeout(timeout);
@@ -283,14 +298,26 @@ export default function App() {
     }
   };
 
-  const handleReset = () => { setBriefing(null); setError(''); };
+  const handleReset = () => { setBriefing(null); setError(''); setPending(null); };
 
-  if (loading)                    return <LoadingView />;
-  if (error)                      return <ErrorView message={error} onReset={handleReset} />;
+  if (loading)  return <LoadingView />;
+  if (error)    return <ErrorView message={error} onReset={handleReset} />;
+
+  // Risk preference screen (between query form and pipeline run)
+  if (pending) {
+    return (
+      <RiskPreferenceSelector
+        onSelect={pref => runPipeline(pending.query, pending.rmId, pref)}
+        onSkip={() => runPipeline(pending.query, pending.rmId, 'MEDIUM')}
+      />
+    );
+  }
+
   if (!briefing)                  return <QueryPanel onSubmit={handleSubmit} loading={loading} />;
+  if (briefing.pipeline_error)    return <ErrorView  message={briefing.message} onReset={handleReset} />;
   if (briefing.error)             return <BlockedView data={briefing} onReset={handleReset} />;
   if (briefing.compliance_block)  return <BlockedView data={briefing} onReset={handleReset} />;
-  if (!briefing.briefing_header)  return <BlockedView data={briefing} onReset={handleReset} />;
+  if (!briefing.briefing_header)  return <ErrorView  message="Pipeline returned an unexpected response format. Please retry." onReset={handleReset} />;
 
   const b = briefing;
   return (
@@ -320,6 +347,10 @@ export default function App() {
           <ComplianceSection data={b.compliance_and_due_diligence} />
           <IncomeValidation  data={b.income_validation} />
           <PortfolioSummary  data={b.portfolio_summary} />
+          <RealReturnsPanel  data={b.real_returns} />
+          <LoansPanel        data={b.loans_summary} />
+          <ExpenditurePanel  data={b.expenditure_summary} />
+          <CIBILPanel        data={b.cibil_summary} />
           <NextSteps         steps={b.next_steps} />
 
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 px-6 py-4 text-center">

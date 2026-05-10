@@ -13,6 +13,7 @@ from tools.agent_tools import (
     get_edd_case_history,
     get_external_bank_statements,
     get_interaction_red_flags,
+    forecast_income_growth,
 )
 
 edd_agent = Agent(
@@ -41,7 +42,21 @@ STEPS — execute in this exact order:
 3. Call get_interaction_red_flags(customer_id)
    Scan RM logs for EDD discussions, low sentiment, unresolved follow-ups.
 
-4. Return a structured EDD finding:
+4. Call forecast_income_growth(role, industry, city, age, experience_years)
+   Derive parameters from the Client 360 / identity map context:
+   - role:             map from CRM sub_segment (e.g. "Promoter/HUF" → "Promoter",
+                       "Tech" → "Tech Professional", "Pharma" → "Pharma Distributor")
+   - industry:         map from sub_segment or segment (e.g. UHNI Promoter → "Diversified")
+   - city:             use branch city if available; default "Mumbai" for UHNI/HNI, "Delhi" for PEP
+   - age:              compute from date_of_birth in CBS customer_master
+   - experience_years: estimate as max(0, age − 22) for salaried professionals;
+                       max(0, age − 25) for business owners and promoters
+   Cross-reference the projected growth rate against the client's declared income
+   trajectory. If declared income has been flat for several years but the
+   forecast predicts significant growth potential, flag as a lifestyle/income
+   consistency check item.
+
+5. Return a structured EDD finding:
    {
      "edd_status":           "CLEARED"|"IN_PROGRESS"|"ESCALATE_TO_COMPLIANCE",
      "open_cases":           [ { "edd_id": "...", "status": "...", "trigger": "..." } ],
@@ -53,7 +68,13 @@ STEPS — execute in this exact order:
      "rm_red_flags":         [ "<RM log concern>" ],
      "escalation_required":  true | false,
      "escalation_reason":    "<reason if required>",
-     "edd_summary":          "<2-3 sentence plain English finding>"
+     "edd_summary":          "<2-3 sentence plain English finding>",
+     "income_growth_forecast": {
+       "projected_growth_rate_pct": <number>,
+       "career_stage":              "<description>",
+       "sector_note":               "<sector premium explanation>",
+       "consistency_assessment":    "CONSISTENT|FLAG_FOR_REVIEW|DISCREPANCY"
+     }
    }
 
 EDD DECISION RULES:
@@ -67,5 +88,6 @@ EDD DECISION RULES:
         get_edd_case_history,
         get_external_bank_statements,
         get_interaction_red_flags,
+        forecast_income_growth,
     ],
 )

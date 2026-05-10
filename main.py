@@ -201,6 +201,7 @@ async def run_pipeline(
     original_query: str,
     rm_id: str,
     guardrail_notes: str = "",
+    risk_preference: str = "MEDIUM",
 ) -> str:
     """
     Runs agents in the correct order for the given scope.
@@ -277,8 +278,11 @@ async def run_pipeline(
         return await _run_agent_with_retry(
             portfolio_analysis_agent, rm_id, sid,
             f"Customer ID: {customer_id}\n"
+            f"Risk preference tier for this customer: {risk_preference}\n"
             f"Client 360 context:\n{outputs['client_360']}\n\n"
-            f"Analyse the portfolio for this customer."
+            f"Analyse the portfolio for this customer. "
+            f"Call fetch_benchmark_returns('{risk_preference}') to get the expected return "
+            f"for this risk tier and compare it against actual portfolio performance."
         )
 
     async def _run_loans():
@@ -398,7 +402,8 @@ async def run_pipeline(
     briefing = await _run_agent_with_retry(
         report_generation_agent, rm_id, sid,
         f"Original RM query: {original_query}\n"
-        f"Pipeline scope: {approved_for}\n\n"
+        f"Pipeline scope: {approved_for}\n"
+        f"Customer risk preference: {risk_preference}\n\n"
         f"=== CLIENT 360 ===\n{outputs.get('client_360', '')}\n\n"
         f"=== CDD ===\n{outputs.get('cdd', 'Not run for this scope')}\n\n"
         f"=== EDD ===\n{outputs.get('edd', 'Not run for this scope')}\n\n"
@@ -411,11 +416,16 @@ async def run_pipeline(
         f"Using all of the above, produce the complete structured advisory briefing."
     )
     print("     ✓ Briefing ready\n")
+    if not briefing or not briefing.strip():
+        return json.dumps({
+            "pipeline_error": True,
+            "message": "Report generation agent returned an empty response. Please retry the query."
+        })
     return briefing
 
 
 # ── Query handler ─────────────────────────────────────────────
-async def process_rm_query(query: str, rm_id: str = "RM_USER") -> str:
+async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: str = "MEDIUM") -> str:
     print(f"\n{'='*68}")
     print(f"  WEALTH ADVISORY INTELLIGENCE PLATFORM")
     print(f"  RM: {rm_id}")
@@ -473,6 +483,7 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER") -> str:
         original_query=query,
         rm_id=rm_id,
         guardrail_notes=notes,
+        risk_preference=risk_preference,
     )
 
     try:

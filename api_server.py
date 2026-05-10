@@ -48,6 +48,7 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     query: str
     rm_id: str = "RM_USER"
+    risk_preference: str = "MEDIUM"
 
     @field_validator("query")
     @classmethod
@@ -60,6 +61,12 @@ class QueryRequest(BaseModel):
     @classmethod
     def rm_id_strip(cls, v: str) -> str:
         return v.strip() or "RM_USER"
+
+    @field_validator("risk_preference")
+    @classmethod
+    def risk_preference_valid(cls, v: str) -> str:
+        valid = {"NO_RISK", "LOW", "MEDIUM", "HIGH"}
+        return v.upper() if v.upper() in valid else "MEDIUM"
 
 
 class ScenarioItem(BaseModel):
@@ -107,7 +114,7 @@ async def run_query(body: QueryRequest):
     Runs the full advisory pipeline for a free-form RM query.
     Returns the structured JSON briefing (or a blocked/compliance-block response).
     """
-    result = await process_rm_query(body.query, body.rm_id)
+    result = await process_rm_query(body.query, body.rm_id, body.risk_preference)
     return _parse_pipeline_result(result)
 
 

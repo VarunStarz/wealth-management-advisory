@@ -11,9 +11,24 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tools.db_utils import query_db, query_one, to_json
+from tools.entity_resolution import resolve_identity
 from config.settings import RISK_THRESHOLDS
 
 logger = logging.getLogger(__name__)
+
+
+def _get_pan(customer_id: str) -> str | None:
+    """Return PAN for a customer from CBS (primary cross-system key after customer_id removal)."""
+    row = query_one("cbs", "SELECT pan_number FROM customer_master WHERE customer_id = %s", (customer_id,))
+    return row["pan_number"] if row else None
+
+
+def _get_kyc_id(pan: str | None) -> str | None:
+    """Return kyc_id from kyc_master for a given PAN (used to query child tables)."""
+    if not pan:
+        return None
+    row = query_one("kyc", "SELECT kyc_id FROM kyc_master WHERE pan_number = %s", (pan,))
+    return row["kyc_id"] if row else None
 
 
 # ============================================================
@@ -22,107 +37,27 @@ logger = logging.getLogger(__name__)
 
 def get_identity_resolution_map(customer_id: str) -> str:
     """
-    Resolves the customer's golden record across all six source systems.
+    Resolves the customer's golden record across all six source systems using
+    multi-attribute probabilistic matching (Jaro-Winkler similarity + LLM arbitration).
 
-    Resolution strategy per system:
-      1. PAN number  — primary cross-system identifier (confidence: EXACT)
-      2. customer_id — legacy fallback if PAN lookup fails  (confidence: LOW)
+    Resolution tiers per external system (KYC, Card, DMS):
+      CONFIRMED  (score >= 0.75)  — auto-accepted, no LLM needed
+      AMBIGUOUS  (0.30-0.74)      — pass candidate pool to LLM for arbitration
+      NOT_FOUND  (score < 0.30)   — no plausible match found
 
-    PMS is always resolved via CRM's client_id, which is the correct
-    inter-system link (PMS never stores customer_id directly).
-
-    Returns a resolution_log showing which key matched each system so
-    downstream agents and the RM know how the profile was assembled.
+    CRM and PMS remain deterministic (PAN for CRM, CRM client_id for PMS).
 
     Args:
         customer_id: CBS master customer identifier (e.g. CUST000001)
 
     Returns:
-        JSON string with cross-system identity map and resolution_log
+        JSON string with per-system candidate pools, similarity scores,
+        resolution tiers, and CBS anchor fields.
     """
     logger.debug("→ entering get_identity_resolution_map(customer_id=%s)", customer_id)
-
-    # ── Step 1: CBS — system of record, always queried by customer_id ──
-    cbs = query_one("cbs",
-        "SELECT customer_id, party_id, full_name, pan_number, segment_code, "
-        "mobile, email, customer_since, status "
-        "FROM customer_master WHERE customer_id = %s", (customer_id,))
-
-    if not cbs:
-        logger.debug("← returning from get_identity_resolution_map(customer_id=%s) — not found in CBS", customer_id)
-        return to_json({"error": f"Customer {customer_id} not found in CBS"})
-
-    pan    = cbs.get("pan_number")
-    resolution_log = {"cbs": {"matched_via": "customer_id", "confidence": "EXACT"}}
-
-    def resolve(db, table, select_cols):
-        """Try PAN first, fall back to customer_id."""
-        if pan:
-            row = query_one(db,
-                f"SELECT {select_cols} FROM {table} WHERE pan_number = %s", (pan,))
-            if row:
-                return row, "pan_number", "EXACT"
-        row = query_one(db,
-            f"SELECT {select_cols} FROM {table} WHERE customer_id = %s", (customer_id,))
-        if row:
-            return row, "customer_id", "LOW"
-        return None, None, "NOT_FOUND"
-
-    # ── Step 2: CRM — resolve via PAN, fallback to customer_id ──
-    crm, crm_via, crm_conf = resolve("crm", "client_profile",
-        "client_id, rm_id, segment, aum_band, risk_appetite_stated, "
-        "last_review_date, next_review_date")
-    resolution_log["crm"] = {"matched_via": crm_via, "confidence": crm_conf}
-
-    # ── Step 3: KYC — resolve via PAN, fallback to customer_id ──
-    kyc, kyc_via, kyc_conf = resolve("kyc", "kyc_master",
-        "kyc_id, kyc_status, kyc_tier, re_kyc_due, notes")
-    resolution_log["kyc"] = {"matched_via": kyc_via, "confidence": kyc_conf}
-
-    # ── Step 4: CARD — resolve via PAN, fallback to customer_id ──
-    card, card_via, card_conf = resolve("card", "card_accounts", "card_id")
-    resolution_log["card"] = {"matched_via": card_via, "confidence": card_conf}
-
-    # ── Step 5: DMS — resolve via PAN, fallback to customer_id ──
-    dms_row, dms_via, dms_conf = resolve("dms", "document_repository", "dms_id")
-    resolution_log["dms"] = {"matched_via": dms_via, "confidence": dms_conf}
-
-    # ── Step 6: PMS — always via CRM client_id (correct inter-system link) ──
-    pms_row = None
-    if crm and crm.get("client_id"):
-        pms_row = query_one("pms",
-            "SELECT portfolio_id FROM portfolio_master WHERE client_id = %s",
-            (crm["client_id"],))
-        resolution_log["pms"] = {
-            "matched_via": "crm.client_id",
-            "confidence": "EXACT" if pms_row else "NOT_FOUND",
-        }
-    else:
-        resolution_log["pms"] = {"matched_via": None, "confidence": "NOT_FOUND"}
-
-    result = to_json({
-        "customer_id":    customer_id,
-        "party_id":       cbs.get("party_id"),
-        "full_name":      cbs.get("full_name"),
-        "pan_number":     pan,
-        "segment":        cbs.get("segment_code"),
-        "mobile":         cbs.get("mobile"),
-        "email":          cbs.get("email"),
-        "customer_since": cbs.get("customer_since"),
-        "cbs_status":     cbs.get("status"),
-        "crm_client_id":  crm.get("client_id") if crm else None,
-        "rm_id":          crm.get("rm_id") if crm else None,
-        "aum_band":       crm.get("aum_band") if crm else None,
-        "risk_appetite":  crm.get("risk_appetite_stated") if crm else None,
-        "kyc_id":         kyc.get("kyc_id") if kyc else None,
-        "kyc_status":     kyc.get("kyc_status") if kyc else "NOT_FOUND",
-        "kyc_tier":       kyc.get("kyc_tier") if kyc else None,
-        "re_kyc_due":     kyc.get("re_kyc_due") if kyc else None,
-        "kyc_notes":      kyc.get("notes") if kyc else None,
-        "resolution_log": resolution_log,
-    })
+    result = resolve_identity(customer_id)
     logger.debug("← returning from get_identity_resolution_map(customer_id=%s)", customer_id)
-    return result
+    return to_json(result)
 
 
 def get_client_core_profile(customer_id: str) -> str:
@@ -237,8 +172,9 @@ def get_kyc_status(customer_id: str) -> str:
     """
     logger.debug("→ entering get_kyc_status(customer_id=%s)", customer_id)
 
+    pan = _get_pan(customer_id)
     kyc = query_one("kyc",
-        "SELECT * FROM kyc_master WHERE customer_id = %s", (customer_id,))
+        "SELECT * FROM kyc_master WHERE pan_number = %s", (pan,)) if pan else None
 
     if not kyc:
         logger.debug("← returning from get_kyc_status(customer_id=%s) — NOT_FOUND", customer_id)
@@ -278,13 +214,15 @@ def run_pep_sanctions_check(customer_id: str) -> str:
     """
     logger.debug("→ entering run_pep_sanctions_check(customer_id=%s)", customer_id)
 
+    pan = _get_pan(customer_id)
+    kyc_id = _get_kyc_id(pan)
     screens = query_db("kyc",
-        "SELECT * FROM pep_screening WHERE customer_id = %s "
-        "ORDER BY screen_date DESC LIMIT 3", (customer_id,))
+        "SELECT * FROM pep_screening WHERE kyc_id = %s "
+        "ORDER BY screen_date DESC LIMIT 3", (kyc_id,)) if kyc_id else []
 
     risk = query_one("kyc",
         "SELECT risk_tier, risk_score, classification_basis, override_flag "
-        "FROM risk_classification WHERE customer_id = %s", (customer_id,))
+        "FROM risk_classification WHERE kyc_id = %s", (kyc_id,)) if kyc_id else None
 
     latest = screens[0] if screens else {}
     pep_flag  = bool(latest.get("pep_flag", False))
@@ -327,9 +265,11 @@ def get_edd_case_history(customer_id: str) -> str:
     """
     logger.debug("→ entering get_edd_case_history(customer_id=%s)", customer_id)
 
+    pan = _get_pan(customer_id)
+    kyc_id = _get_kyc_id(pan)
     cases = query_db("kyc",
-        "SELECT * FROM edd_cases WHERE customer_id = %s ORDER BY open_date DESC",
-        (customer_id,))
+        "SELECT * FROM edd_cases WHERE kyc_id = %s ORDER BY open_date DESC",
+        (kyc_id,)) if kyc_id else []
 
     open_cases      = [c for c in cases if c["case_status"] in
                        ("OPEN", "IN_PROGRESS", "PENDING_DOCS")]
@@ -365,8 +305,11 @@ def get_external_bank_statements(customer_id: str) -> str:
     """
     logger.debug("→ entering get_external_bank_statements(customer_id=%s)", customer_id)
 
+    pan = _get_pan(customer_id)
+    dms_ids = [r["dms_id"] for r in query_db("dms",
+        "SELECT dms_id FROM document_repository WHERE pan_number = %s", (pan,))] if pan else []
     stmts = query_db("dms",
-        "SELECT * FROM bank_statements WHERE customer_id = %s", (customer_id,))
+        "SELECT * FROM bank_statements WHERE dms_id = ANY(%s)", (dms_ids,)) if dms_ids else []
 
     flagged = [
         s for s in stmts
@@ -447,9 +390,12 @@ def get_declared_income(customer_id: str) -> str:
     """
     logger.debug("→ entering get_declared_income(customer_id=%s)", customer_id)
 
+    pan = _get_pan(customer_id)
+    dms_ids = [r["dms_id"] for r in query_db("dms",
+        "SELECT dms_id FROM document_repository WHERE pan_number = %s", (pan,))] if pan else []
     proofs = query_db("dms",
-        "SELECT * FROM income_proofs WHERE customer_id = %s "
-        "ORDER BY filing_date DESC", (customer_id,))
+        "SELECT * FROM income_proofs WHERE dms_id = ANY(%s) "
+        "ORDER BY filing_date DESC", (dms_ids,)) if dms_ids else []
 
     latest_gross  = float(proofs[0]["gross_income"])   if proofs else 0.0
     latest_net    = float(proofs[0]["net_income"])     if proofs else 0.0
@@ -482,9 +428,10 @@ def get_card_spend_analysis(customer_id: str) -> str:
     """
     logger.debug("→ entering get_card_spend_analysis(customer_id=%s)", customer_id)
 
+    pan = _get_pan(customer_id)
     cards = query_db("card",
         "SELECT card_id, card_type, credit_limit, current_balance "
-        "FROM card_accounts WHERE customer_id = %s", (customer_id,))
+        "FROM card_accounts WHERE pan_number = %s", (pan,)) if pan else []
 
     if not cards:
         logger.debug("← returning from get_card_spend_analysis(customer_id=%s) — no card accounts", customer_id)
@@ -1124,13 +1071,15 @@ def get_cibil_credit_profile(customer_id: str) -> str:
     logger.debug("→ entering get_cibil_credit_profile(customer_id=%s)", customer_id)
 
     # ── Core KYC / risk data ────────────────────────────────────
+    pan = _get_pan(customer_id)
+    kyc_id = _get_kyc_id(pan)
     risk = query_one("kyc",
         "SELECT risk_tier, risk_score, classification_basis, override_flag "
-        "FROM risk_classification WHERE customer_id = %s", (customer_id,))
+        "FROM risk_classification WHERE kyc_id = %s", (kyc_id,)) if kyc_id else None
 
     kyc = query_one("kyc",
-        "SELECT kyc_status, re_kyc_due FROM kyc_master WHERE customer_id = %s",
-        (customer_id,))
+        "SELECT kyc_status, re_kyc_due FROM kyc_master WHERE pan_number = %s",
+        (pan,)) if pan else None
 
     # ── Liabilities (CBS) ───────────────────────────────────────
     liabilities = query_db("cbs",
@@ -1140,7 +1089,7 @@ def get_cibil_credit_profile(customer_id: str) -> str:
     # ── Card accounts (CARD) ────────────────────────────────────
     cards = query_db("card",
         "SELECT card_id, credit_limit, current_balance FROM card_accounts "
-        "WHERE customer_id = %s AND card_status = 'ACTIVE'", (customer_id,))
+        "WHERE pan_number = %s AND card_status = 'ACTIVE'", (pan,)) if pan else []
 
     card_ids = [c["card_id"] for c in cards]
 
@@ -1595,23 +1544,26 @@ def compute_composite_risk_score(customer_id: str) -> str:
 
     logger.debug("→ entering compute_composite_risk_score(customer_id=%s)", customer_id)
 
+    pan = _get_pan(customer_id)
+    kyc_id = _get_kyc_id(pan)
+
     risk = query_one("kyc",
         "SELECT risk_tier, risk_score FROM risk_classification "
-        "WHERE customer_id = %s", (customer_id,))
+        "WHERE kyc_id = %s", (kyc_id,)) if kyc_id else None
 
     pep = query_one("kyc",
         "SELECT pep_flag, pep_category, adverse_media_hit "
-        "FROM pep_screening WHERE customer_id = %s "
-        "ORDER BY screen_date DESC LIMIT 1", (customer_id,))
+        "FROM pep_screening WHERE kyc_id = %s "
+        "ORDER BY screen_date DESC LIMIT 1", (kyc_id,)) if kyc_id else None
 
     edd_open = query_db("kyc",
         "SELECT edd_id, case_status, escalation_flag FROM edd_cases "
-        "WHERE customer_id = %s AND case_status NOT IN "
-        "('CLOSED_CLEARED', 'CLOSED_ESCALATED')", (customer_id,))
+        "WHERE kyc_id = %s AND case_status NOT IN "
+        "('CLOSED_CLEARED', 'CLOSED_ESCALATED')", (kyc_id,)) if kyc_id else []
 
     kyc_rec = query_one("kyc",
-        "SELECT kyc_status, re_kyc_due FROM kyc_master WHERE customer_id = %s",
-        (customer_id,))
+        "SELECT kyc_status, re_kyc_due FROM kyc_master WHERE pan_number = %s",
+        (pan,)) if pan else None
 
     liabilities = query_db("cbs",
         "SELECT dpd_days, npa_flag FROM liability_accounts "
@@ -1702,3 +1654,356 @@ def compute_composite_risk_score(customer_id: str) -> str:
         customer_id, score, tier, len(red_flags)
     )
     return result
+
+
+# ============================================================
+# LAYER 5 — PORTFOLIO RECOMMENDATION AGENT (Steps 4 & 5)
+# ============================================================
+
+def get_fund_universe(risk_tier: str) -> str:
+    """
+    Returns the curated instrument universe from fund_master for the given
+    risk tier. Includes instruments at the specified tier AND one tier below
+    for portfolio stability (e.g. HIGH tier client also gets MEDIUM instruments).
+
+    Args:
+        risk_tier: Client's risk preference — NO_RISK, LOW, MEDIUM, or HIGH
+
+    Returns:
+        JSON string with eligible_tiers and list of active instruments
+        (fund_id, scheme_code, instrument_name, short_name, category,
+        asset_class, amc, risk_tier, instrument_type, data_source,
+        static_return_pct, min_investment_inr)
+    """
+    logger.debug("→ entering get_fund_universe(risk_tier=%s)", risk_tier)
+
+    tier = (risk_tier or "MEDIUM").upper()
+
+    tier_order = ["NO_RISK", "LOW", "MEDIUM", "HIGH"]
+    idx = tier_order.index(tier) if tier in tier_order else 2
+    # One tier below for stability; NO_RISK stays as-is
+    eligible_tiers = tier_order[max(0, idx - 1): idx + 1]
+
+    placeholders = ",".join(["%s"] * len(eligible_tiers))
+    funds = query_db("pms",
+        f"SELECT fund_id, scheme_code, instrument_name, short_name, category, "
+        f"asset_class, amc, risk_tier, instrument_type, data_source, "
+        f"static_return_pct, min_investment_inr "
+        f"FROM fund_master WHERE risk_tier IN ({placeholders}) AND is_active = TRUE "
+        f"ORDER BY risk_tier, asset_class, fund_id",
+        tuple(eligible_tiers))
+
+    result = to_json({
+        "requested_tier":   tier,
+        "eligible_tiers":   eligible_tiers,
+        "instrument_count": len(funds),
+        "instruments":      funds,
+    })
+    logger.debug(
+        "← get_fund_universe(risk_tier=%s) — eligible_tiers=%s, count=%d",
+        tier, eligible_tiers, len(funds)
+    )
+    return result
+
+
+def fetch_fund_performance(scheme_code, fund_id: str) -> str:
+    """
+    Fetches 3yr CAGR, 1yr return, annualised volatility, and max drawdown
+    for a single fund. Uses a three-tier data strategy:
+
+    1. fund_performance_cache (PMS DB) — returns immediately if within 24hr TTL
+    2. MFAPI.in live NAV history     — for funds with a scheme_code (MFAPI source)
+    3. fund_master.static_return_pct — for static instruments (PPF, FDs, NSC, SGB)
+
+    Live MFAPI.in results are written to fund_performance_cache with 24hr TTL
+    to avoid 30+ second latency on repeat pipeline runs.
+
+    Args:
+        scheme_code: AMFI scheme code for MFAPI.in lookup (None for static instruments)
+        fund_id:     fund_master primary key (e.g. FUND007)
+
+    Returns:
+        JSON string with cagr_3yr_pct, cagr_1yr_pct, volatility_pct,
+        max_drawdown_pct, nav_as_of_date, and source
+    """
+    import urllib.request
+    import math
+    from datetime import date, datetime, timedelta
+
+    logger.debug(
+        "→ entering fetch_fund_performance(scheme_code=%s, fund_id=%s)",
+        scheme_code, fund_id
+    )
+
+    # ── 1. Cache lookup ─────────────────────────────────────────
+    cached = query_one("pms",
+        "SELECT cagr_3yr_pct, cagr_1yr_pct, volatility_pct, max_drawdown_pct, "
+        "nav_as_of_date "
+        "FROM fund_performance_cache "
+        "WHERE fund_id = %s AND expires_at > NOW() "
+        "ORDER BY cached_at DESC LIMIT 1",
+        (fund_id,))
+
+    if cached:
+        result = to_json({
+            "fund_id":          fund_id,
+            "cagr_3yr_pct":     float(cached["cagr_3yr_pct"])     if cached["cagr_3yr_pct"]     is not None else None,
+            "cagr_1yr_pct":     float(cached["cagr_1yr_pct"])     if cached["cagr_1yr_pct"]     is not None else None,
+            "volatility_pct":   float(cached["volatility_pct"])   if cached["volatility_pct"]   is not None else None,
+            "max_drawdown_pct": float(cached["max_drawdown_pct"]) if cached["max_drawdown_pct"] is not None else None,
+            "nav_as_of_date":   str(cached["nav_as_of_date"]),
+            "source":           "fund_performance_cache (24hr TTL)",
+        })
+        logger.debug("← fetch_fund_performance(%s) — cache HIT", fund_id)
+        return result
+
+    # ── 2. Static instruments (PPF, FD, NSC, SGB, EPF) ─────────
+    if not scheme_code:
+        fund = query_one("pms",
+            "SELECT static_return_pct FROM fund_master WHERE fund_id = %s",
+            (fund_id,))
+        static_ret = float(fund["static_return_pct"]) if fund and fund.get("static_return_pct") else None
+        result = to_json({
+            "fund_id":          fund_id,
+            "cagr_3yr_pct":     static_ret,
+            "cagr_1yr_pct":     static_ret,
+            "volatility_pct":   0.0,
+            "max_drawdown_pct": 0.0,
+            "nav_as_of_date":   str(date.today()),
+            "source":           "Static government-declared/bank rate (no market NAV)",
+        })
+        logger.debug(
+            "← fetch_fund_performance(%s) — STATIC ret=%.2f%%",
+            fund_id, static_ret or 0
+        )
+        return result
+
+    # ── 3. Live MFAPI.in fetch ──────────────────────────────────
+    url = f"https://api.mfapi.in/mf/{scheme_code}"
+    cagr_3yr = cagr_1yr = volatility = max_dd = None
+    nav_date  = str(date.today())
+    source    = f"MFAPI.in scheme {scheme_code}"
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+
+        nav_records = data.get("data", [])   # newest first: [{"date":"DD-MM-YYYY","nav":"..."}]
+
+        if len(nav_records) < 30:
+            raise ValueError(
+                f"Insufficient NAV data ({len(nav_records)} records) for {fund_id}"
+            )
+
+        # Parse date + NAV; MFAPI date format is DD-MM-YYYY
+        parsed: list[tuple] = []
+        for r in nav_records:
+            try:
+                dt  = datetime.strptime(r["date"], "%d-%m-%Y").date()
+                nav = float(r["nav"])
+                parsed.append((dt, nav))
+            except (ValueError, KeyError):
+                continue
+
+        if not parsed:
+            raise ValueError("Could not parse any NAV records")
+
+        latest_date, latest_nav = parsed[0]   # newest first
+        nav_date = str(latest_date)
+
+        # Find NAV closest to 3yr and 1yr ago
+        target_3yr = latest_date - timedelta(days=3 * 365)
+        target_1yr = latest_date - timedelta(days=365)
+        nav_3yr = nav_1yr = None
+        for dt, nav in parsed:
+            if nav_3yr is None and dt <= target_3yr:
+                nav_3yr = nav
+            if nav_1yr is None and dt <= target_1yr:
+                nav_1yr = nav
+            if nav_3yr is not None and nav_1yr is not None:
+                break
+
+        if nav_3yr and nav_3yr > 0:
+            cagr_3yr = round(((latest_nav / nav_3yr) ** (1 / 3) - 1) * 100, 2)
+        if nav_1yr and nav_1yr > 0:
+            cagr_1yr = round(((latest_nav / nav_1yr) - 1) * 100, 2)
+
+        # Annualised volatility from daily returns over the 3yr window
+        cutoff = latest_date - timedelta(days=3 * 365)
+        subset = [(dt, nav) for dt, nav in parsed if dt >= cutoff]
+        if len(subset) > 30:
+            returns = [
+                (subset[i][1] / subset[i + 1][1]) - 1
+                for i in range(len(subset) - 1)
+            ]
+            n    = len(returns)
+            mean = sum(returns) / n
+            var  = sum((r - mean) ** 2 for r in returns) / n
+            # Annualise: ~252 trading days
+            volatility = round(math.sqrt(var) * math.sqrt(252) * 100, 2)
+
+        # Max drawdown over 3yr window (oldest-first scan)
+        if len(subset) > 1:
+            navs_asc = [nav for _, nav in reversed(subset)]
+            peak = navs_asc[0]
+            worst = 0.0
+            for nav in navs_asc[1:]:
+                if nav > peak:
+                    peak = nav
+                dd = (nav - peak) / peak * 100
+                if dd < worst:
+                    worst = dd
+            max_dd = round(worst, 2)
+
+        source = f"MFAPI.in scheme {scheme_code} ({len(nav_records)} NAV records)"
+
+        # ── 4. Write to cache ─────────────────────────────────────
+        _write_fund_performance_cache(
+            fund_id, scheme_code, cagr_3yr, cagr_1yr, volatility, max_dd, latest_date
+        )
+
+    except Exception as exc:
+        logger.warning(
+            "fetch_fund_performance: MFAPI.in failed for scheme %s (%s)",
+            scheme_code, exc
+        )
+        source = f"MFAPI.in unavailable — {type(exc).__name__}"
+
+    result = to_json({
+        "fund_id":          fund_id,
+        "cagr_3yr_pct":     cagr_3yr,
+        "cagr_1yr_pct":     cagr_1yr,
+        "volatility_pct":   volatility,
+        "max_drawdown_pct": max_dd,
+        "nav_as_of_date":   nav_date,
+        "source":           source,
+    })
+    logger.debug(
+        "← fetch_fund_performance(%s) — cagr_3yr=%s%%, vol=%s%%",
+        fund_id, cagr_3yr, volatility
+    )
+    return result
+
+
+def _write_fund_performance_cache(
+    fund_id: str,
+    scheme_code,
+    cagr_3yr,
+    cagr_1yr,
+    volatility,
+    max_dd,
+    nav_as_of,
+) -> None:
+    """Writes a new fund performance cache row with 24hr TTL."""
+    import psycopg2
+    import psycopg2.extras
+    from config.settings import DB_CONFIGS
+
+    cfg = DB_CONFIGS["pms"]
+    try:
+        conn = psycopg2.connect(
+            host=cfg["host"], port=cfg["port"],
+            user=cfg["user"], password=cfg["password"],
+            dbname=cfg["dbname"],
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO fund_performance_cache
+                    (fund_id, scheme_code, cagr_3yr_pct, cagr_1yr_pct,
+                     volatility_pct, max_drawdown_pct, nav_as_of_date,
+                     cached_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW() + INTERVAL '24 hours')
+                """,
+                (fund_id, scheme_code, cagr_3yr, cagr_1yr,
+                 volatility, max_dd, nav_as_of),
+            )
+        conn.commit()
+        conn.close()
+        logger.debug("_write_fund_performance_cache: wrote cache for %s", fund_id)
+    except Exception as exc:
+        logger.warning(
+            "_write_fund_performance_cache: failed for %s (%s)", fund_id, exc
+        )
+
+
+def log_recommendation(
+    customer_id: str,
+    rm_id: str,
+    investable_amount_inr: float,
+    risk_tier_used: str,
+    recommended_funds: list[dict],
+    allocation_summary: str,
+    pipeline_run_id: str = "",
+) -> str:
+    """
+    Persists a completed wealth recommendation to the recommendation_log table
+    in the CRM database. Called by the portfolio recommendation agent after
+    producing the final instrument list.
+
+    Args:
+        customer_id:           CBS customer identifier (e.g. CUST000011)
+        rm_id:                 RM identifier (e.g. RM001)
+        investable_amount_inr: Amount the RM entered before running the pipeline
+        risk_tier_used:        Risk tier applied during recommendation
+        recommended_funds:     List of recommended instrument dicts
+        allocation_summary:    Human-readable allocation breakdown string
+        pipeline_run_id:       Optional pipeline run ID for cross-reference
+
+    Returns:
+        JSON string with rec_id and status
+    """
+    import psycopg2
+    import psycopg2.extras
+    import json as _json
+    from datetime import datetime
+    from config.settings import DB_CONFIGS
+
+    logger.debug(
+        "→ entering log_recommendation(customer_id=%s, amount=%.0f)",
+        customer_id, investable_amount_inr
+    )
+
+    rec_id = f"REC{datetime.now().strftime('%Y%m%d')}{customer_id}"
+    cfg    = DB_CONFIGS["crm"]
+
+    try:
+        conn = psycopg2.connect(
+            host=cfg["host"], port=cfg["port"],
+            user=cfg["user"], password=cfg["password"],
+            dbname=cfg["dbname"],
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO recommendation_log
+                    (rec_id, customer_id, rm_id, investable_amount_inr,
+                     risk_tier_used, recommended_funds, allocation_summary,
+                     pipeline_run_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (rec_id) DO NOTHING
+                """,
+                (
+                    rec_id,
+                    customer_id,
+                    rm_id,
+                    investable_amount_inr,
+                    risk_tier_used,
+                    _json.dumps(recommended_funds),
+                    allocation_summary,
+                    pipeline_run_id or "",
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        result = to_json({"rec_id": rec_id, "status": "logged"})
+        logger.debug("← log_recommendation(%s) — written rec_id=%s", customer_id, rec_id)
+        return result
+
+    except Exception as exc:
+        logger.warning("log_recommendation: failed for %s (%s)", customer_id, exc)
+        return to_json({"rec_id": rec_id, "status": "error", "error": str(exc)})

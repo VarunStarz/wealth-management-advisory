@@ -10,8 +10,15 @@ load_dotenv()
 
 # ── Gemini model ─────────────────────────────────────────────
 #GEMINI_MODEL   = "gemini-3-pro-preview"
-GEMINI_MODEL   = "gemini-3.1-pro-preview"
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+#GEMINI_MODEL   = "gemini-3.1-pro-preview"
+GEMINI_MODEL   = "gemini-2.5-pro"
+
+# ── Auth — Gemini Developer API (commented out: migrated to Vertex AI) ───────
+#GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+
+# ── Auth — Vertex AI ─────────────────────────────────────────
+GOOGLE_CLOUD_PROJECT  = os.getenv("GOOGLE_CLOUD_PROJECT",  "<PROJECT_ID>")
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 # ── PostgreSQL connection configs ────────────────────────────
 # Each database is an isolated PostgreSQL instance/schema.
@@ -75,9 +82,12 @@ GUARDRAIL_RULES = {
     # Queries must mention a customer identifier to proceed
     "require_customer_context": True,
 
-    # Block queries that are clearly outside scope
+    # Block queries that are clearly outside scope.
+    # NOTE: "investment recommendation" was removed — the platform now supports
+    # the WEALTH_RECOMMENDATION pipeline where the RM supplies an investable amount
+    # and the system generates a structured portfolio suggestion.
+    # Ad-hoc stock/fund tips ("buy this stock", "sell this fund") are still blocked.
     "blocked_intents": [
-        "investment recommendation",
         "buy this stock",
         "sell this fund",
         "market prediction",

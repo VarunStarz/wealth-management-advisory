@@ -14,16 +14,18 @@ import CIBILPanel              from './components/CIBILPanel.jsx';
 import NextSteps               from './components/NextSteps.jsx';
 import RiskPreferenceSelector  from './components/RiskPreferenceSelector.jsx';
 import RealReturnsPanel        from './components/RealReturnsPanel.jsx';
+import RecommendationPanel     from './components/RecommendationPanel.jsx';
 
 const BASE     = 'http://localhost:8000';
 const RM_IDS   = ['RM_USER', 'RM001', 'RM002', 'RM003', 'RM004', 'RM005'];
 
 // ── Query input panel ─────────────────────────────────────────
 function QueryPanel({ onSubmit, loading }) {
-  const [query,     setQuery]     = useState('');
-  const [rmId,      setRmId]      = useState('RM_USER');
-  const [scenarios, setScenarios] = useState([]);
-  const [tab,       setTab]       = useState('query'); // 'query' | 'scenario'
+  const [query,          setQuery]          = useState('');
+  const [rmId,           setRmId]           = useState('RM_USER');
+  const [scenarios,      setScenarios]      = useState([]);
+  const [tab,            setTab]            = useState('query'); // 'query' | 'scenario'
+  const [investableAmt,  setInvestableAmt]  = useState('');
 
   // Fetch scenario list from the API on mount
   useEffect(() => {
@@ -44,7 +46,12 @@ function QueryPanel({ onSubmit, loading }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (query.trim()) onSubmit(query.trim(), rmId);
+    if (!query.trim()) return;
+    let finalQuery = query.trim();
+    if (investableAmt.trim()) {
+      finalQuery += `. Investable amount: Rs.${investableAmt.trim()}`;
+    }
+    onSubmit(finalQuery, rmId);
   };
 
   return (
@@ -149,6 +156,33 @@ function QueryPanel({ onSubmit, loading }) {
                   placeholder="e.g. Mr Arjun Menon (CUST000001) is here for his annual wealth review. Can you give me a full briefing before I meet him?"
                   className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder:text-slate-400"
                 />
+              </div>
+
+              {/* Optional investable amount — for WEALTH_RECOMMENDATION queries */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                  Investable Amount{' '}
+                  <span className="normal-case font-normal text-slate-400">
+                    (Rs.) — optional, for wealth recommendations
+                  </span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium select-none">
+                    Rs.
+                  </span>
+                  <input
+                    type="text"
+                    value={investableAmt}
+                    onChange={e => setInvestableAmt(e.target.value)}
+                    placeholder="e.g. 15,00,000"
+                    className="w-full border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder:text-slate-400"
+                  />
+                </div>
+                {investableAmt.trim() && (
+                  <p className="text-xs text-amber-600 mt-1.5 font-medium">
+                    Amount will be included in the query for the wealth recommendation pipeline.
+                  </p>
+                )}
               </div>
 
               <button
@@ -344,8 +378,9 @@ export default function App() {
             <div className="lg:col-span-2"><RiskPanel      data={b.compliance_and_due_diligence} /></div>
           </div>
 
-          <ComplianceSection data={b.compliance_and_due_diligence} />
-          <IncomeValidation  data={b.income_validation} />
+          <ComplianceSection     data={b.compliance_and_due_diligence} />
+          <RecommendationPanel   data={b.wealth_recommendation} />
+          <IncomeValidation      data={b.income_validation} />
           <PortfolioSummary  data={b.portfolio_summary} />
           <RealReturnsPanel  data={b.real_returns} />
           <LoansPanel        data={b.loans_summary} />

@@ -178,13 +178,15 @@ def seed_kyc():
     try:
         run(conn, """
             INSERT INTO kyc_master
-              (kyc_id, customer_id, kyc_type, kyc_status, kyc_tier,
+              (kyc_id, pan_number, registered_name, dob,
+               kyc_type, kyc_status, kyc_tier,
                verification_method, verified_date, expiry_date,
                re_kyc_due, verified_by, notes)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (kyc_id) DO NOTHING
         """, (
-            "KYC000000011", "CUST000011", "IN_PERSON", "VERIFIED", "STANDARD",
+            "KYC000000011", "KABVK3579N", "Vikram Anand Krishnan", "1979-08-14",
+            "IN_PERSON", "VERIFIED", "STANDARD",
             "DOCUMENT", "2016-11-10", "2026-11-10",
             "2026-11-10", "ComplianceOfficer_01",
             "KYC verified at branch. HNI segment. MODERATE risk. Clean profile.",
@@ -219,13 +221,13 @@ def seed_kyc():
 
         run(conn, """
             INSERT INTO pep_screening
-              (screen_id, customer_id, screen_date, screen_type,
+              (screen_id, kyc_id, screen_date, screen_type,
                pep_flag, pep_category, sanctions_list, sanctions_hit,
                adverse_media_hit, screened_by, next_review)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (screen_id) DO NOTHING
         """, (
-            "SCR000000011", "CUST000011", "2024-01-15", "PERIODIC",
+            "SCR000000011", "KYC000000011", "2024-01-15", "PERIODIC",
             False, "NONE", "OFAC,UN,SEBI", "None",
             "None", "AutoScreen_v2", "2025-01-15",
         ))
@@ -233,13 +235,13 @@ def seed_kyc():
 
         run(conn, """
             INSERT INTO risk_classification
-              (risk_class_id, customer_id, risk_tier, risk_score,
+              (risk_class_id, kyc_id, risk_tier, risk_score,
                classification_date, classification_basis,
                override_flag, override_reason, reviewed_by)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (risk_class_id) DO NOTHING
         """, (
-            "RCLASS00000011", "CUST000011", "LOW", 20.0,
+            "RCLASS00000011", "KYC000000011", "LOW", 20.0,
             "2024-01-15",
             "Verified KYC, no PEP, no adverse media, no EDD cases, MODERATE risk appetite, stable income.",
             False, None, "ComplianceOfficer_01",
@@ -364,13 +366,13 @@ def seed_card():
     try:
         run(conn, """
             INSERT INTO card_accounts
-              (card_id, customer_id, card_type, credit_limit, current_balance,
+              (card_id, pan_number, cardholder_name, card_type, credit_limit, current_balance,
                available_limit, min_payment_due, payment_due_date,
                card_status, issue_date)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (card_id) DO NOTHING
         """, (
-            "CARD00000011", "CUST000011", "GOLD",
+            "CARD00000011", "KABVK3579N", "Vikram Anand Krishnan", "GOLD",
             200000.00, 90000.00, 110000.00,
             9000.00, "2024-04-15", "ACTIVE", "2017-01-15",
         ))
@@ -431,64 +433,64 @@ def seed_dms():
     section("DMS -- document_repository, income_proofs")
     conn = connect_rw("dms")
     try:
-        # PAN document
+        # PAN document (DMS000000021 — 011-013 were taken by other customers)
         run(conn, """
             INSERT INTO document_repository
-              (dms_id, customer_id, doc_category, doc_type, file_name,
+              (dms_id, pan_number, applicant_name, doc_category, doc_type, file_name,
                upload_date, uploaded_by, file_size_kb, mime_type,
                storage_path, access_level)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (dms_id) DO NOTHING
         """, (
-            "DMS000000011", "CUST000011", "IDENTITY", "PAN Card",
+            "DMS000000021", "KABVK3579N", "Vikram Anand Krishnan", "IDENTITY", "PAN Card",
             "CUST000011_PAN_KABVK3579N.pdf",
             "2016-11-10", "OnboardingAgent", 110, "application/pdf",
             "cbs/cust000011/identity/", "INTERNAL",
         ))
-        print("  OK document_repository -- DMS000000011 (PAN)")
+        print("  OK document_repository -- DMS000000021 (PAN)")
 
         # Aadhaar document
         run(conn, """
             INSERT INTO document_repository
-              (dms_id, customer_id, doc_category, doc_type, file_name,
+              (dms_id, pan_number, applicant_name, doc_category, doc_type, file_name,
                upload_date, uploaded_by, file_size_kb, mime_type,
                storage_path, access_level)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (dms_id) DO NOTHING
         """, (
-            "DMS000000012", "CUST000011", "IDENTITY", "Aadhaar Card",
+            "DMS000000022", "KABVK3579N", "Vikram Anand Krishnan", "IDENTITY", "Aadhaar Card",
             "CUST000011_AADHAAR_masked.pdf",
             "2016-11-10", "OnboardingAgent", 95, "application/pdf",
             "cbs/cust000011/identity/", "INTERNAL",
         ))
-        print("  OK document_repository -- DMS000000012 (Aadhaar)")
+        print("  OK document_repository -- DMS000000022 (Aadhaar)")
 
         # ITR document -- must be inserted before income_proofs (FK on dms_id)
         run(conn, """
             INSERT INTO document_repository
-              (dms_id, customer_id, doc_category, doc_type, file_name,
+              (dms_id, pan_number, applicant_name, doc_category, doc_type, file_name,
                upload_date, uploaded_by, file_size_kb, mime_type,
                storage_path, access_level)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (dms_id) DO NOTHING
         """, (
-            "DMS000000013", "CUST000011", "INCOME", "ITR Filing",
+            "DMS000000023", "KABVK3579N", "Vikram Anand Krishnan", "INCOME", "ITR Filing",
             "CUST000011_ITR_AY2023-24.pdf",
             "2023-11-15", "RM002", 850, "application/pdf",
             "cbs/cust000011/income/", "RESTRICTED",
         ))
-        print("  OK document_repository -- DMS000000013 (ITR AY2023-24)")
+        print("  OK document_repository -- DMS000000023 (ITR AY2023-24)")
 
         # income_proofs -- ITR FY2023-24: gross Rs.35L, net Rs.28L
         run(conn, """
             INSERT INTO income_proofs
-              (proof_id, dms_id, customer_id, proof_type, assessment_year,
+              (proof_id, dms_id, proof_type, assessment_year,
                gross_income, net_income, employer_name,
                filing_date, extracted_by, extraction_confidence)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (proof_id) DO NOTHING
         """, (
-            "INCPR0000011", "DMS000000013", "CUST000011", "ITR", "2023-24",
+            "INCPR0000011", "DMS000000023", "ITR", "2023-24",
             3500000.00, 2800000.00, "Krishnan Consulting Services LLP",
             "2023-11-15", "MANUAL", 0.95,
         ))

@@ -27,6 +27,9 @@
 #   PORTFOLIO_ONLY:
 #     Guardrail → Client 360 → Portfolio Analysis → Risk Assessment → Report Generation
 #
+#   WEALTH_RECOMMENDATION:
+#     Guardrail → Client 360 → CDD → Portfolio Recommendation → Report Generation
+#
 # Usage:
 #   python main.py                       # interactive mode
 #   python main.py --customer CUST000005 # specific customer
@@ -50,7 +53,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
 
-from config.settings import GOOGLE_API_KEY
+#from config.settings import GOOGLE_API_KEY
+from config.settings import GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION
 from agents.guardrail.agent          import guardrail_agent, validate_query
 from agents.client_360.agent         import client_360_agent
 from agents.cdd.agent                import cdd_agent
@@ -60,10 +64,14 @@ from agents.portfolio_analysis.agent import portfolio_analysis_agent
 from agents.loans.agent              import loans_agent
 from agents.expenditure.agent        import expenditure_agent
 from agents.cibil.agent              import cibil_agent
-from agents.risk_assessment.agent    import risk_assessment_agent
-from agents.report_generation.agent  import report_generation_agent
+from agents.risk_assessment.agent             import risk_assessment_agent
+from agents.report_generation.agent           import report_generation_agent
+from agents.portfolio_recommendation.agent    import portfolio_recommendation_agent
 
-os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+#os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"]  = "1"
+os.environ["GOOGLE_CLOUD_PROJECT"]       = GOOGLE_CLOUD_PROJECT
+os.environ["GOOGLE_CLOUD_LOCATION"]      = GOOGLE_CLOUD_LOCATION
 
 # ── Logging setup ─────────────────────────────────────────────
 def _setup_logging() -> None:
@@ -202,6 +210,7 @@ async def run_pipeline(
     rm_id: str,
     guardrail_notes: str = "",
     risk_preference: str = "MEDIUM",
+    investable_amount_inr: float = None,
 ) -> str:
     """
     Runs agents in the correct order for the given scope.
@@ -229,7 +238,7 @@ async def run_pipeline(
     print("     ✓ Client 360 done")
 
     # ── STEP 2: Parallel analysis (scope-driven) ───────────────
-    run_cdd         = approved_for in ("FULL_BRIEFING", "CDD_ONLY",       "RISK_ONLY")
+    run_cdd         = approved_for in ("FULL_BRIEFING", "CDD_ONLY",       "RISK_ONLY", "WEALTH_RECOMMENDATION")
     run_income      = approved_for in ("FULL_BRIEFING", "INCOME_ONLY",    "RISK_ONLY")
     run_portfolio   = approved_for in ("FULL_BRIEFING", "PORTFOLIO_ONLY", "RISK_ONLY")
     run_loans       = approved_for in ("FULL_BRIEFING",                   "RISK_ONLY")
@@ -370,8 +379,27 @@ async def run_pipeline(
             print("  [Step 3] EDD — skipped (not triggered by CDD)")
         outputs["edd"] = "EDD not triggered — client cleared CDD."
 
-    # ── STEP 4: Risk Assessment (always runs — all scopes) ────
-    run_risk = True
+    # ── STEP 3b: Portfolio Recommendation (WEALTH_RECOMMENDATION only) ──
+    if approved_for == "WEALTH_RECOMMENDATION":
+        print("  [Step 3b] Portfolio Recommendation Agent...")
+        sid = _sid(rm_id, "rec")
+        await session_service.create_session(
+            app_name=APP_NAME, user_id=rm_id, session_id=sid
+        )
+        amt_str = f"Rs.{int(investable_amount_inr):,}" if investable_amount_inr else "not specified"
+        outputs["portfolio_recommendation"] = await _run_agent_with_retry(
+            portfolio_recommendation_agent, rm_id, sid,
+            f"Customer ID: {customer_id}\n"
+            f"Investable amount: {amt_str}\n"
+            f"Investment risk preference tier: {risk_preference}\n"
+            f"Client 360 context:\n{outputs.get('client_360', '')}\n\n"
+            f"CDD findings:\n{outputs.get('cdd', '')}\n\n"
+            f"Generate the portfolio recommendation for this customer."
+        )
+        print("     ✓ Portfolio Recommendation done")
+
+    # ── STEP 4: Risk Assessment (skipped for WEALTH_RECOMMENDATION) ──
+    run_risk = approved_for != "WEALTH_RECOMMENDATION"
     if run_risk:
         print("  [Step 4] Risk Assessment Agent...")
         sid = _sid(rm_id, "risk")
@@ -413,6 +441,7 @@ async def run_pipeline(
         f"=== EXPENDITURE ANALYSIS ===\n{outputs.get('expenditure', 'Not run for this scope')}\n\n"
         f"=== CIBIL SCORE ===\n{outputs.get('cibil', 'Not run for this scope')}\n\n"
         f"=== RISK ASSESSMENT ===\n{outputs.get('risk', 'Not run for this scope')}\n\n"
+        f"=== PORTFOLIO RECOMMENDATION ===\n{outputs.get('portfolio_recommendation', 'Not run for this scope')}\n\n"
         f"Using all of the above, produce the complete structured advisory briefing."
     )
     print("     ✓ Briefing ready\n")
@@ -421,6 +450,10 @@ async def run_pipeline(
             "pipeline_error": True,
             "message": "Report generation agent returned an empty response. Please retry the query."
         })
+    # Strip markdown code fences if the LLM wrapped the JSON (e.g. ```json ... ```)
+    parsed = _extract_json(briefing)
+    if parsed:
+        return json.dumps(parsed, ensure_ascii=False)
     return briefing
 
 
@@ -465,9 +498,10 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
             print(f"   Suggestion: {alt}")
         return f"BLOCKED: {reason}" + (f"\n\nSuggested: {alt}" if alt else "")
 
-    customer_id  = guardrail_result.get("customer_id", _extract_customer_id(query))
-    approved_for = guardrail_result.get("approved_for", "FULL_BRIEFING")
-    notes        = guardrail_result.get("notes", "")
+    customer_id           = guardrail_result.get("customer_id", _extract_customer_id(query))
+    approved_for          = guardrail_result.get("approved_for", "FULL_BRIEFING")
+    notes                 = guardrail_result.get("notes", "")
+    investable_amount_inr = guardrail_result.get("investable_amount_inr")
 
     print(f"Guardrail APPROVED")
     print(f"   Customer : {customer_id}")
@@ -484,6 +518,7 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
         rm_id=rm_id,
         guardrail_notes=notes,
         risk_preference=risk_preference,
+        investable_amount_inr=investable_amount_inr,
     )
 
     try:
@@ -552,6 +587,15 @@ SCENARIOS = {
             "Please run a full briefing."
         ),
     },
+    18: {
+        "label": "WEALTH_RECOMMENDATION — portfolio deployment for HNI (CUST000011)",
+        "rm_id": "RM002",
+        "query": (
+            "Vikram Krishnan (CUST000011) has Rs.20,00,000 he wants to deploy. "
+            "Based on his risk profile, can you generate a wealth recommendation "
+            "for how to invest this amount?"
+        ),
+    },
 }
 
 
@@ -566,7 +610,7 @@ def print_scenarios():
 async def main():
     parser = argparse.ArgumentParser(description="Wealth Management Advisory Intelligence Platform")
     parser.add_argument("--customer", help="Customer ID for a full briefing")
-    parser.add_argument("--scenario", type=int, help="Run a numbered test scenario (1-17)")
+    parser.add_argument("--scenario", type=int, help="Run a numbered test scenario (1-18)")
     parser.add_argument("--list", action="store_true", help="List all test scenarios")
     parser.add_argument("--rm", default="RM_USER", help="RM identifier")
     args = parser.parse_args()

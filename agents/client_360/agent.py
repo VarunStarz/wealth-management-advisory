@@ -39,14 +39,50 @@ STEPS — execute in this exact order:
 
 4. Return EXACTLY this JSON — no extra keys, no deviations:
    {
-     "identity_map":        { ...full output from get_identity_resolution_map, UNCHANGED... },
+     "identity_map":        { ...see IDENTITY RESOLUTION section below for how to build this... },
      "core_profile":        { ...full output from get_client_core_profile, UNCHANGED... },
      "transaction_signals": { ...full output from get_transaction_summary, UNCHANGED... },
-     "identity_gaps":       [ "<system_name>: NOT_FOUND" for each system where resolution_log confidence is NOT_FOUND ],
+     "identity_gaps":       [ "<system_name>: NOT_FOUND or UNRESOLVED" per system ],
      "ai_observations":     [ "<insight>", ... ]
    }
 
-STRICT RULES — identity_map / core_profile / transaction_signals:
+IDENTITY RESOLUTION — how to build identity_map from get_identity_resolution_map output:
+
+get_identity_resolution_map returns per-system candidate pools with similarity scores.
+You must resolve each system into a single matched record using these rules:
+
+CONFIRMED (resolution_tier = "CONFIRMED", score >= 0.75):
+  Accept automatically. Extract the record's primary ID and fields from best_candidate.
+  In resolution_log for this system: { "method": "CONFIRMED", "confidence": <score> }
+
+AMBIGUOUS (resolution_tier = "AMBIGUOUS", 0.30 <= score < 0.75):
+  Reason about the evidence. Consider:
+  - Which attributes matched and how closely (PAN, name, DOB)
+  - Whether the combination is sufficiently unique (DOB exact + name partial is stronger than name alone)
+  - Real-world reasons for mismatch: PAN absent on pre-mandate card, name abbreviation on card,
+    transliteration differences (Anita/Anitha), middle name omitted on documents
+  Decide whether to accept the best candidate or reject.
+  In resolution_log for this system: {
+    "method": "LLM_ARBITRATION",
+    "confidence": <your assessed 0.0-1.0>,
+    "matched_attributes": [...from the candidate...],
+    "reasoning": "<one concise sentence explaining your decision>"
+  }
+  IMPORTANT: Do not default to NOT_FOUND out of caution. If DOB is exact and name
+  is a clear subset or abbreviation of the CBS name, that is sufficient to resolve as MATCH.
+
+NOT_FOUND (resolution_tier = "NOT_FOUND" or no candidates):
+  Add to identity_gaps: "<system>: NOT_FOUND"
+  In resolution_log: { "method": "NOT_FOUND", "confidence": 0.0 }
+
+The identity_map must always include these flat fields (extracting from best_candidate):
+  customer_id, party_id, full_name, pan_number, segment, mobile, email,
+  customer_since, cbs_status, crm_client_id, rm_id, aum_band, risk_appetite,
+  kyc_id, kyc_status, kyc_tier, re_kyc_due, kyc_notes, card_id, portfolio_id,
+  dms_id (from best_candidate of each system or null if NOT_FOUND),
+  resolution_log (per-system with method, confidence, and optionally matched_attributes/reasoning)
+
+STRICT RULES — core_profile / transaction_signals:
 - Copy tool outputs VERBATIM. Do not rephrase, summarise, or modify any value.
 - Every number, date, ID, and status must be exactly as returned by the tools.
 - Downstream agents parse these fields directly — any change breaks the pipeline.

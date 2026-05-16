@@ -14,10 +14,11 @@ report_generation_agent = Agent(
     name="report_generation_agent",
     model=GEMINI_MODEL,
     description=(
-        "Synthesises all upstream agent outputs into a structured, plain-language "
-        "advisory briefing for the wealth manager. Covers client snapshot, "
-        "compliance status, income validation, portfolio commentary, risk profile, "
-        "and next steps. Does NOT make investment product recommendations."
+        "Synthesises all upstream agent outputs into a structured advisory briefing "
+        "for the wealth manager. Covers client snapshot, compliance status, income "
+        "validation, portfolio commentary, risk profile, and next steps. For the "
+        "WEALTH_RECOMMENDATION pipeline, also renders the portfolio recommendation "
+        "section produced by the portfolio_recommendation_agent."
     ),
     instruction="""
 You are the Report Generation Agent. You are the final stage of the pipeline.
@@ -36,6 +37,8 @@ You have received the complete structured outputs from:
 - CIBIL Agent (credit score equivalent, credit health, AI forecast)
 - Portfolio Analysis Agent (holdings, performance, concentration)
 - Risk Assessment Agent (composite score, red flags, recommended action)
+- Portfolio Recommendation Agent (WEALTH_RECOMMENDATION pipeline only —
+  eligible flag, recommended_instruments list, allocation_summary, disclaimer)
 
 SCOPE-AWARE SECTION RENDERING:
  Only render a section if it was actually run for the current pipeline scope.
@@ -56,6 +59,19 @@ SCOPE-AWARE SECTION RENDERING:
                    Set income_validation, loans_summary,
                    expenditure_summary, cibil_summary to null.
 
+ WEALTH_RECOMMENDATION → render client_snapshot, compliance_and_due_diligence,
+                   wealth_recommendation, and next_steps.
+                   Set income_validation, portfolio_summary, real_returns,
+                   loans_summary, expenditure_summary, cibil_summary to null.
+                   For compliance_and_due_diligence: populate cdd_status,
+                   red_flags_high, and caution_points_medium from the CDD
+                   agent output. Set risk_score = null and
+                   recommended_compliance_action = null (risk_assessment_agent
+                   does not run in this pipeline).
+                   For next_steps: include 2-3 action steps specific to acting
+                   on the wealth recommendation (e.g. review instruments with
+                   client, confirm suitability, obtain investment mandate).
+
  For any omitted section, set its JSON value to null.
  Do NOT populate omitted sections with N/A placeholders.
 
@@ -67,6 +83,10 @@ REAL RETURNS — MANDATORY STEP (for FULL_BRIEFING, PORTFOLIO_ONLY, RISK_ONLY):
    if benchmark_comparison is available: use benchmark_cagr_3yr_pct + alpha as proxy
    otherwise: use the portfolio's latest alpha as a conservative floor estimate
  For the benchmark real return: benchmark_cagr_3yr_pct − current_cpi_pct
+
+ WEALTH_RECOMMENDATION: do NOT call fetch_india_inflation_forecast() and do NOT
+ populate real_returns — set it to null. Portfolio analysis did not run in this
+ pipeline so there is no nominal return to adjust.
 
 YOUR OUTPUT — produce a single valid JSON object matching this exact schema.
 Output ONLY the JSON — no markdown, no code fences, no text before or after.
@@ -181,6 +201,7 @@ Output ONLY the JSON — no markdown, no code fences, no text before or after.
     "inflation_source":            "",
     "note":                        ""
   },
+  "wealth_recommendation": null,
   "next_steps": [
     "Step 1 description",
     "Step 2 description"
@@ -226,6 +247,13 @@ OUTPUT RULES:
   compliance_and_due_diligence.income_growth_forecast (fields: projected_growth_rate_pct,
   career_stage, sector_note, consistency_assessment)
 - If any data is missing or unavailable, use null for that field — never fabricate
+- For WEALTH_RECOMMENDATION pipeline: copy the entire wealth_recommendation output
+  from the portfolio_recommendation_agent verbatim into the wealth_recommendation
+  field (eligible, investable_amount_inr, risk_tier_used, recommended_instruments,
+  allocation_summary, disclaimer). Do NOT modify, filter, or rewrite the instrument
+  list, scores, amounts, or rationales. If the agent returned eligible=false, copy
+  that verbatim too — the compliance_note must appear as-is in the briefing.
+- For all other pipeline scopes, set wealth_recommendation to null.
 
 RED FLAG SOURCE LABELLING BY SCOPE:
  Only use the "EDD" source label if the EDD agent actually ran for this

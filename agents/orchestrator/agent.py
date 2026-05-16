@@ -10,16 +10,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from google.adk.agents import Agent
 from config.settings import GEMINI_MODEL
 
-from agents.client_360.agent        import client_360_agent
-from agents.cdd.agent               import cdd_agent
-from agents.edd.agent               import edd_agent
-from agents.income_validation.agent import income_validation_agent
-from agents.portfolio_analysis.agent import portfolio_analysis_agent
-from agents.loans.agent             import loans_agent
-from agents.expenditure.agent       import expenditure_agent
-from agents.cibil.agent             import cibil_agent
-from agents.risk_assessment.agent   import risk_assessment_agent
-from agents.report_generation.agent import report_generation_agent
+from agents.client_360.agent                  import client_360_agent
+from agents.cdd.agent                         import cdd_agent
+from agents.edd.agent                         import edd_agent
+from agents.income_validation.agent           import income_validation_agent
+from agents.portfolio_analysis.agent          import portfolio_analysis_agent
+from agents.loans.agent                       import loans_agent
+from agents.expenditure.agent                 import expenditure_agent
+from agents.cibil.agent                       import cibil_agent
+from agents.risk_assessment.agent             import risk_assessment_agent
+from agents.report_generation.agent           import report_generation_agent
+from agents.portfolio_recommendation.agent    import portfolio_recommendation_agent
 
 orchestrator_agent = Agent(
     name="wealth_advisory_orchestrator",
@@ -82,16 +83,59 @@ STEP 4 — SYNTHESIS (always last)
   The report_generation_agent produces the final advisory briefing.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WEALTH_RECOMMENDATION PIPELINE (separate flow)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When approved_for = WEALTH_RECOMMENDATION, run this pipeline instead of the
+standard FULL_BRIEFING sequence:
+
+  WR-STEP 1 — IDENTITY (mandatory, always first)
+    Delegate to: client_360_agent
+    Pass: customer_id
+    Wait for: identity_map + full client profile
+
+  WR-STEP 2 — COMPLIANCE CHECK
+    Delegate to: cdd_agent
+    Pass: customer_id, identity_map
+    Wait for: cdd_status, red_flags_high
+    The portfolio_recommendation_agent uses cdd_status to gate its output —
+    do NOT skip this step even if the client appears clean.
+
+  WR-STEP 3 — PORTFOLIO RECOMMENDATION (core step)
+    Delegate to: portfolio_recommendation_agent
+    Pass ALL of the following as context:
+      - customer_id
+      - identity_map (from WR-Step 1)
+      - cdd_status and red_flags_high (from WR-Step 2)
+      - risk_preference_tier (from the guardrail output or client profile)
+      - investable_amount_inr (from the guardrail's approved JSON — this is
+        the amount the RM typed; pass it exactly as a number, e.g. 1500000)
+      - rm_id (from client_360 CRM output, or from the original query context)
+    Wait for: wealth_recommendation output (eligible, recommended_instruments,
+              allocation_summary, disclaimer)
+
+  WR-STEP 4 — SYNTHESIS
+    Delegate to: report_generation_agent
+    Pass: outputs from WR-Steps 1, 2, and 3.
+    Set pipeline scope = WEALTH_RECOMMENDATION so report_generation_agent
+    renders the wealth_recommendation section alongside the standard
+    client_snapshot and compliance sections.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ORCHESTRATION RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Never skip Step 1 — identity resolution is mandatory.
 - Always carry the identity_map through every agent delegation.
 - Pass the guardrail's approved_for field to scope the pipeline:
-    FULL_BRIEFING   → run all steps
-    CDD_ONLY        → run Steps 1 + 2 (CDD only) + minimal report
-    PORTFOLIO_ONLY  → run Steps 1 + 3 (portfolio) + minimal report
-    INCOME_ONLY     → run Steps 1 + 2 (income only) + minimal report
-    RISK_ONLY       → run Steps 1 + 2 + 3 + report
+    FULL_BRIEFING        → run all steps
+    CDD_ONLY             → run Steps 1 + 2 (CDD only) + minimal report
+    PORTFOLIO_ONLY       → run Steps 1 + 3 (portfolio) + minimal report
+    INCOME_ONLY          → run Steps 1 + 2 (income only) + minimal report
+    RISK_ONLY            → run Steps 1 + 2 + 3 + report
+    WEALTH_RECOMMENDATION → run WR-Steps 1–4 (see section above)
+- For WEALTH_RECOMMENDATION: if investable_amount_inr is null in the guardrail
+  output, include a note in the final briefing asking the RM to re-run with
+  an investable amount before the recommendation can be generated.
 - Your final output to the user IS the advisory briefing from report_generation_agent.
 - Log which agents ran and in what order in a brief pipeline summary at the top.
 - CRITICAL: Do NOT return raw JSON or intermediate agent outputs as your final response.
@@ -110,5 +154,6 @@ ORCHESTRATION RULES
         portfolio_analysis_agent,
         risk_assessment_agent,
         report_generation_agent,
+        portfolio_recommendation_agent,
     ],
 )

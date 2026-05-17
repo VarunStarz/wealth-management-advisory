@@ -531,6 +531,11 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
 
 
 # ── Test scenarios ────────────────────────────────────────────
+# Curated subset for professor demo — covers all major pipeline capabilities.
+# Run with: python main.py --list-demo   (to list)
+#           python main.py --scenario N  (to run any scenario by number)
+DEMO_SCENARIOS = [1, 2, 7, 18, 19, 20, 21, 22]
+
 SCENARIOS = {
     1:  {"label": "Full briefing — standard HNI (clean profile)",        "rm_id": "RM001", "query": "Mr Arjun Menon (CUST000001) is here for his annual wealth review. He wants to know how his portfolio is doing and whether there are any areas we should look at. Can you give me a full briefing before I meet him?"},
     2:  {"label": "High-risk client — cash deposits + EDD open",         "rm_id": "RM003", "query": "Farhan Sheikh (CUST000005) has come in asking about restructuring his wealth. Before I proceed, I need a complete intelligence briefing. What's his current compliance status and risk profile?"},
@@ -590,33 +595,84 @@ SCENARIOS = {
     18: {
         "label": "WEALTH_RECOMMENDATION — portfolio deployment for HNI (CUST000011)",
         "rm_id": "RM002",
+        "risk_preference": "HIGH",
         "query": (
             "Vikram Krishnan (CUST000011) has Rs.20,00,000 he wants to deploy. "
             "Based on his risk profile, can you generate a wealth recommendation "
             "for how to invest this amount?"
         ),
     },
+    19: {
+        "label": "WEALTH_RECOMMENDATION — bonus deployment, MEDIUM risk (CUST000001)",
+        "rm_id": "RM001",
+        "risk_preference": "MEDIUM",
+        "query": (
+            "Arjun Menon (CUST000001) has received an annual bonus of Rs.10,00,000 "
+            "and wants to invest it. Can you generate a wealth recommendation for "
+            "how to deploy this amount?"
+        ),
+    },
+    20: {
+        "label": "WEALTH_RECOMMENDATION — first-time investor, LOW risk (CUST000004)",
+        "rm_id": "RM002",
+        "risk_preference": "LOW",
+        "query": (
+            "Anita Nair (CUST000004) wants to start her investment journey. "
+            "She has Rs.3,00,000 to deploy and prefers a conservative approach. "
+            "Can you generate a wealth recommendation for her?"
+        ),
+    },
+    21: {
+        "label": "WEALTH_RECOMMENDATION — compliance block expected (CUST000005)",
+        "rm_id": "RM003",
+        "risk_preference": "HIGH",
+        "query": (
+            "Farhan Sheikh (CUST000005) wants to invest Rs.25,00,000 aggressively. "
+            "Can you generate a wealth recommendation for this amount?"
+        ),
+    },
+    22: {
+        "label": "WEALTH_RECOMMENDATION — capital preservation, NO_RISK (CUST000013)",
+        "rm_id": "RM001",
+        "risk_preference": "NO_RISK",
+        "query": (
+            "Sneha Varma (CUST000013) has Rs.8,00,000 she wants to put away safely. "
+            "She is very risk-averse and wants full capital preservation. "
+            "Can you generate a no-risk wealth recommendation for her?"
+        ),
+    },
 }
 
 
-def print_scenarios():
-    print("\nAvailable Test Scenarios:\n")
+def print_scenarios(demo_only: bool = False):
+    title = "Demo Scenarios" if demo_only else "All Test Scenarios"
+    print(f"\n{title}:\n")
     for num, s in SCENARIOS.items():
-        tag = "BLOCKED" if "BLOCKED" in s["label"] else "APPROVED"
-        print(f"  {num:2d}. [{tag}] {s['label']}")
+        if demo_only and num not in DEMO_SCENARIOS:
+            continue
+        tag  = "BLOCKED" if "BLOCKED" in s["label"] else "APPROVED"
+        star = " ★" if num in DEMO_SCENARIOS else "  "
+        print(f"  {num:2d}.{star}[{tag}] {s['label']}")
+    if not demo_only:
+        print("\n  ★ = included in demo set (--list-demo to show only these)")
     print()
 
 
 async def main():
     parser = argparse.ArgumentParser(description="Wealth Management Advisory Intelligence Platform")
     parser.add_argument("--customer", help="Customer ID for a full briefing")
-    parser.add_argument("--scenario", type=int, help="Run a numbered test scenario (1-18)")
+    parser.add_argument("--scenario", type=int, help="Run a numbered test scenario (1-22)")
     parser.add_argument("--list", action="store_true", help="List all test scenarios")
+    parser.add_argument("--list-demo", action="store_true", help="List the curated demo scenarios")
     parser.add_argument("--rm", default="RM_USER", help="RM identifier")
     args = parser.parse_args()
 
     if args.list:
         print_scenarios()
+        return
+
+    if getattr(args, "list_demo", False):
+        print_scenarios(demo_only=True)
         return
 
     if args.scenario:
@@ -625,7 +681,7 @@ async def main():
             print(f"Scenario {args.scenario} not found. Use --list to see options.")
             return
         print(f"\nScenario {args.scenario}: {s['label']}")
-        await process_rm_query(s["query"], s["rm_id"])
+        await process_rm_query(s["query"], s["rm_id"], s.get("risk_preference", "MEDIUM"))
         return
 
     if args.customer:
@@ -639,7 +695,7 @@ async def main():
     print("\n" + "="*68)
     print("  WEALTH ADVISORY INTELLIGENCE PLATFORM — Interactive Mode")
     print("  Type your query as a wealth manager. Type 'quit' to exit.")
-    print("  Type 'scenarios' to see test scenarios.")
+    print("  Type 'scenarios' to see all test scenarios, 'demo' for the demo set.")
     print("="*68 + "\n")
 
     while True:
@@ -655,6 +711,9 @@ async def main():
             break
         if query.lower() == "scenarios":
             print_scenarios()
+            continue
+        if query.lower() == "demo":
+            print_scenarios(demo_only=True)
             continue
         await process_rm_query(query, args.rm)
 

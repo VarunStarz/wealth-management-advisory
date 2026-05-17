@@ -3,7 +3,7 @@ api_server.py — FastAPI bridge for the Wealth Advisory Intelligence Platform
 
 Endpoints:
   GET  /api/health            Health check
-  GET  /api/scenarios         List all 17 test scenarios
+  GET  /api/scenarios         List curated demo scenarios (8 of 22)
   POST /api/query             Run a free-form RM query
   POST /api/scenario/{n}      Run a numbered test scenario directly
 
@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 
-from main import process_rm_query, SCENARIOS
+from main import process_rm_query, SCENARIOS, DEMO_SCENARIOS
 
 # ── App setup ─────────────────────────────────────────────────
 app = FastAPI(
@@ -95,7 +95,7 @@ async def health():
 
 @app.get("/api/scenarios", response_model=list[ScenarioItem], tags=["Scenarios"])
 async def list_scenarios():
-    """Returns all 17 test scenarios with their id, label, rm_id, and query text."""
+    """Returns the curated demo scenarios (DEMO_SCENARIOS subset of all test scenarios)."""
     return [
         ScenarioItem(
             id=n,
@@ -105,6 +105,7 @@ async def list_scenarios():
             blocked="BLOCKED" in s["label"],
         )
         for n, s in SCENARIOS.items()
+        if n in DEMO_SCENARIOS
     ]
 
 

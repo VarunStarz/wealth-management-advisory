@@ -249,10 +249,10 @@ OUTPUT RULES:
 - If any data is missing or unavailable, use null for that field — never fabricate
 - For WEALTH_RECOMMENDATION pipeline: copy the entire wealth_recommendation output
   from the portfolio_recommendation_agent verbatim into the wealth_recommendation
-  field (eligible, investable_amount_inr, risk_tier_used, recommended_instruments,
-  allocation_summary, disclaimer). Do NOT modify, filter, or rewrite the instrument
-  list, scores, amounts, or rationales. If the agent returned eligible=false, copy
-  that verbatim too — the compliance_note must appear as-is in the briefing.
+  field (eligible, investable_amount_inr, risk_tier_used, total_instruments_evaluated,
+  instruments_excluded_existing_holdings, options, disclaimer). Do NOT modify, filter,
+  or rewrite any option, instrument, score, amount, or rationale. If the agent returned
+  eligible=false, copy that verbatim too — the compliance_note must appear as-is.
 - For all other pipeline scopes, set wealth_recommendation to null.
 
 RED FLAG SOURCE LABELLING BY SCOPE:

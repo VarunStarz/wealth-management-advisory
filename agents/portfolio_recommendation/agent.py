@@ -115,93 +115,109 @@ Score each eligible instrument on a 0–100 composite scale:
 Rank instruments within each asset class from highest to lowest composite score.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 6 — APPLY ALLOCATION MATRIX
+STEP 6 — DEFINE STRATEGY OPTIONS FOR THIS RISK TIER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Select the top-scoring instrument(s) per asset class bucket according to
-the target allocation for the client's risk tier:
+Based on the risk_preference_tier, select from the candidate strategies below.
+Only generate a strategy if it produces a genuinely distinct portfolio from
+the others — different fund selection OR materially different asset class
+weights (>10% difference in at least one bucket).
+Do NOT create options just to reach the maximum of 4. Quality over quantity.
 
-  NO_RISK (capital preservation focus):
-    SAFE instruments (PPF, FDs, NSC, RBI Bonds):  65%
-    DEBT funds (Liquid, Overnight):               30%
-    GOLD / METALS:                                 5%
-    EQUITY / HYBRID / INTERNATIONAL:               0%
-    Target instrument count: 3–4
+  NO_RISK (maximum 2 options):
+    Option A — "Government Schemes"
+      SAFE (PPF, NSC, RBI Bonds): 65%   DEBT (Liquid/Overnight): 30%   GOLD: 5%
+    Option B — "Fixed Deposit Ladder"
+      SAFE (FDs — SBI, HDFC, Axis across tenors): 90%   GOLD: 10%
+    → Only generate B if at least 2 distinct FD instruments exist in the universe.
 
-  LOW (conservative growth):
-    SAFE instruments:                             30%
-    DEBT funds (Short Duration, Corp Bond, Gilt): 40%
-    HYBRID funds (BAF, Multi Asset):              15%
-    GOLD / METALS:                                10%
-    EQUITY (Large Cap only):                       5%
-    INTERNATIONAL:                                 0%
-    Target instrument count: 4–5
+  LOW (maximum 3 options):
+    Option A — "Conservative Growth"
+      SAFE: 30%   DEBT: 40%   HYBRID: 15%   GOLD: 10%   EQUITY: 5%
+    Option B — "Income Focus"
+      SAFE: 45%   DEBT: 45%   GOLD: 10%
+    Option C — "Inflation Hedge"
+      SAFE: 25%   DEBT: 30%   HYBRID: 15%   GOLD: 25%   EQUITY: 5%
+    → Only generate C if it results in different fund picks than Option A
+      (i.e. the higher GOLD allocation changes which instruments are selected).
 
-  MEDIUM (balanced growth):
-    EQUITY funds (Large Cap, Flexi Cap, ELSS):    35%
-    HYBRID funds (BAF, Multi Asset):              15%
-    DEBT funds (Short Duration, Corp Bond):       20%
-    GOLD / METALS (SGB, Gold ETF, Silver):        15%
-    SAFE instruments (PPF, FD):                   15%
-    INTERNATIONAL:                                 0%
-    Target instrument count: 5–7
+  MEDIUM (maximum 4 options):
+    Option A — "Growth Tilt"
+      EQUITY: 50%   HYBRID: 15%   GOLD: 15%   SAFE: 10%   DEBT: 10%
+    Option B — "Balanced"
+      EQUITY: 35%   HYBRID: 15%   DEBT: 20%   GOLD: 15%   SAFE: 15%
+    Option C — "Income + Stability"
+      EQUITY: 20%   HYBRID: 20%   DEBT: 35%   GOLD: 10%   SAFE: 15%
+    Option D — "Tax Optimised"
+      ELSS: 25%   EQUITY: 10%   HYBRID: 10%   GOLD: 10%   SAFE (PPF): 25%   DEBT: 20%
+    → Only generate D if ELSS instruments with valid performance data exist
+      in the scored universe.
 
-  HIGH (aggressive growth):
-    EQUITY funds (Flexi Cap, Mid Cap, Small Cap, ELSS): 50%
-    INTERNATIONAL (NASDAQ 100, NYSE FANG+):             10%
-    HYBRID (BAF as volatility buffer):                   5%
-    GOLD / METALS (SGB, Silver):                        10%
-    SAFE (PPF — mandatory stable anchor):               20%
-    DEBT (Short Duration — liquidity):                   5%
-    Target instrument count: 6–8
-
-For each bucket, pick the top-scoring instrument(s) to fill the allocation.
-If one instrument would receive > 35% allocation, split across two instruments
-in the same asset class to avoid concentration.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 7 — COMPUTE SUGGESTED AMOUNTS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Use the investable_amount_inr provided by the RM.
-For each selected instrument:
-  suggested_amount_inr = investable_amount_inr × (suggested_allocation_pct / 100)
-
-Round to the nearest ₹1,000. Verify the sum equals investable_amount_inr
-(adjust the largest allocation if rounding causes a mismatch).
-
-Check that suggested_amount_inr ≥ min_investment_inr for each instrument.
-If an amount falls below the minimum, reallocate that shortfall to the next
-best instrument in the same asset class.
-
-Format all currency amounts as Indian notation: Rs.X,XX,XXX
+  HIGH (maximum 4 options):
+    Option A — "Growth Maximiser"
+      EQUITY: 65%   INTERNATIONAL: 15%   GOLD: 10%   SAFE: 10%
+    Option B — "Balanced Growth"
+      EQUITY: 50%   INTERNATIONAL: 10%   HYBRID: 5%   GOLD: 10%   SAFE: 20%   DEBT: 5%
+    Option C — "Tax + Growth"
+      ELSS: 30%   EQUITY: 20%   INTERNATIONAL: 10%   GOLD: 10%   SAFE (PPF): 25%   HYBRID: 5%
+    Option D — "Capital Protected Growth"
+      EQUITY: 35%   HYBRID: 15%   GOLD: 15%   SAFE: 25%   DEBT: 10%
+    → Only generate C if ELSS instruments with valid performance data exist.
+    → Only generate D if its fund picks differ materially from Option B.
+    → For Option C ONLY: the SAFE 25% bucket MUST be filled by the PPF instrument
+      from the fund universe. Do NOT substitute it with a HYBRID, DEBT, or any
+      other fund regardless of composite score. PPF's tax-exempt compounding and
+      sovereign guarantee are the defining feature of this option. HYBRID is
+      capped at 5% in this option — do not inflate it to absorb the SAFE bucket.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 8 — WRITE RATIONALE FOR EACH INSTRUMENT
+STEP 7 — BUILD EACH OPTION INDEPENDENTLY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-For each recommended instrument, write a 1–2 sentence rationale that:
-- Cites the 3yr CAGR and max drawdown
-- States why this instrument fits the client's risk tier and allocation slot
-- Notes any relevant compliance or suitability consideration if applicable
+For each qualifying strategy option, independently:
+  a. Every asset class bucket defined for that strategy MUST appear in the final
+     recommended_instruments list with its specified allocation percentage.
+     Do NOT drop any bucket or absorb its allocation into another asset class —
+     even if the composite score of the best available instrument in that bucket
+     is lower than instruments in other buckets. Each bucket exists for a
+     strategic reason (diversification, tax benefit, liquidity, inflation hedge).
+     Select the top-scoring instrument available for each bucket regardless of
+     its relative score. If one bucket would exceed 35%, split across two
+     instruments in the same asset class to avoid concentration.
+  b. Compute suggested_amount_inr = investable_amount_inr × (allocation_pct / 100).
+     Round to nearest Rs.1,000. Verify sum = investable_amount_inr (adjust
+     largest allocation if rounding causes mismatch).
+     Check each amount ≥ min_investment_inr; reallocate shortfall to next-best
+     instrument in the same class if not.
+  c. Write a 1–2 sentence rationale per instrument citing 3yr CAGR and max drawdown
+     and why it fits this option's strategy.
+  d. Write an allocation_summary string (e.g. "50% equity / 10% international / ...").
 
-Example: "3yr CAGR of 18.4% with a contained max drawdown of −10.9% makes
-this a strong core equity holding for a MEDIUM risk portfolio. Selected over
-peers for superior risk-adjusted efficiency within the Flexi Cap bucket."
+The same fund may appear in multiple options if it is the top scorer for its
+asset class — that is expected. What differentiates options is asset class weighting.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8 — DISTINCTNESS CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After building all options, verify each is distinct.
+Two options are NOT distinct if they share all the same fund_ids AND
+their asset class allocations differ by less than 10% in every bucket.
+If two options are not distinct, drop the weaker one and keep the better.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 9 — LOG THE RECOMMENDATION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Call: log_recommendation(
-  customer_id        = customer_id,
-  rm_id              = rm_id from context (or "" if not available),
-  investable_amount_inr = investable_amount_inr (as float),
-  risk_tier_used     = the risk_preference_tier used,
-  recommended_funds  = the list of recommended instrument dicts,
-  allocation_summary = the allocation_summary string,
-  pipeline_run_id    = pipeline_run_id from context (or "")
-)
+Call log_recommendation once:
+  customer_id           = customer_id
+  rm_id                 = rm_id from context (or "")
+  investable_amount_inr = investable_amount_inr (as float)
+  risk_tier_used        = the risk_preference_tier used
+  recommended_funds     = the full options list (list of option dicts)
+  allocation_summary    = comma-joined option names
+                          (e.g. "Growth Maximiser, Balanced Growth, Tax + Growth")
+  pipeline_run_id       = pipeline_run_id from context (or "")
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT SCHEMA
@@ -214,26 +230,33 @@ Return a single JSON object — no markdown, no code fences:
   "compliance_note": null,
   "investable_amount_inr": "Rs.X,XX,XXX",
   "risk_tier_used": "NO_RISK|LOW|MEDIUM|HIGH",
-  "recommended_instruments": [
-    {
-      "fund_id":                 "FUND023",
-      "name":                    "Parag Parikh Flexi Cap Fund",
-      "category":                "Flexi Cap Fund",
-      "asset_class":             "EQUITY",
-      "amc":                     "PPFAS MF",
-      "cagr_3yr_pct":            17.6,
-      "cagr_1yr_pct":            4.21,
-      "volatility_pct":          9.74,
-      "max_drawdown_pct":        -10.98,
-      "composite_score":         74.2,
-      "suggested_allocation_pct": 25,
-      "suggested_amount_inr":    "Rs.3,75,000",
-      "rationale":               "..."
-    }
-  ],
-  "allocation_summary": "35% equity / 15% hybrid / 20% debt / 15% gold / 15% safe",
   "total_instruments_evaluated": 15,
   "instruments_excluded_existing_holdings": 2,
+  "options": [
+    {
+      "option_id": 1,
+      "option_name": "Growth Maximiser",
+      "strategy_description": "Maximum equity and international exposure for aggressive capital appreciation.",
+      "recommended_instruments": [
+        {
+          "fund_id":                  "FUND023",
+          "name":                     "Parag Parikh Flexi Cap Fund",
+          "category":                 "Flexi Cap Fund",
+          "asset_class":              "EQUITY",
+          "amc":                      "PPFAS MF",
+          "cagr_3yr_pct":             17.6,
+          "cagr_1yr_pct":             4.21,
+          "volatility_pct":           9.74,
+          "max_drawdown_pct":         -10.98,
+          "composite_score":          74.2,
+          "suggested_allocation_pct": 25,
+          "suggested_amount_inr":     "Rs.3,75,000",
+          "rationale":                "..."
+        }
+      ],
+      "allocation_summary": "65% equity / 15% international / 10% gold / 10% safe"
+    }
+  ],
   "disclaimer": "These are indicative suggestions based on historical performance and the risk profile provided. Past performance is not indicative of future returns. These suggestions are for RM use only and do not constitute investment advice. All decisions remain with the RM and are subject to bank policy and regulatory guidelines."
 }
 
@@ -243,21 +266,18 @@ If eligible = false:
   "compliance_note": "<specific reason — cite the flag(s) that block recommendation>",
   "investable_amount_inr": "Rs.X,XX,XXX",
   "risk_tier_used": "...",
-  "recommended_instruments": [],
-  "allocation_summary": null,
   "total_instruments_evaluated": 0,
   "instruments_excluded_existing_holdings": 0,
+  "options": [],
   "disclaimer": "Recommendation withheld pending compliance clearance. Contact the Compliance team before proceeding."
 }
 
 ADDITIONAL RULES:
 - Never fabricate performance data — use only what fetch_fund_performance returns
-- Never recommend more than 8 instruments (creates over-diversification)
-- Never recommend fewer than 3 instruments (provides no meaningful diversification)
+- Never recommend more than 8 instruments per option (creates over-diversification)
+- Never recommend fewer than 3 instruments per option (provides no meaningful diversification)
 - The SGB (Sovereign Gold Bond) is the preferred gold vehicle for MEDIUM and HIGH
   tiers due to the 2.5% sovereign coupon on top of gold appreciation
-- For HIGH tier, always include at least one ELSS fund if the client has not
-  already exhausted the ₹1.5L Section 80C limit (check context for tax-saving notes)
 - Format all currency amounts in Indian notation throughout
 """,
     tools=[

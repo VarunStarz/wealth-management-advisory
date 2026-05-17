@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 const ASSET_CLASS_META = {
   EQUITY:        { color: '#3b82f6', label: 'Equity' },
   DEBT:          { color: '#10b981', label: 'Debt' },
@@ -140,10 +142,13 @@ function InstrumentCard({ inst, rank }) {
 
 // ── Main panel ────────────────────────────────────────────────
 export default function RecommendationPanel({ data }) {
+  const [selectedIdx, setSelectedIdx] = useState(0);
   if (!data) return null;
 
-  const instruments = data.recommended_instruments ?? [];
-  const tierStyle   = RISK_BADGE[data.risk_tier_used] ?? RISK_BADGE.MEDIUM;
+  const options    = data.options ?? [];
+  const tierStyle  = RISK_BADGE[data.risk_tier_used] ?? RISK_BADGE.MEDIUM;
+  const activeOpt  = options[selectedIdx] ?? null;
+  const instruments = activeOpt?.recommended_instruments ?? [];
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -179,16 +184,16 @@ export default function RecommendationPanel({ data }) {
         </div>
       )}
 
-      {/* Eligible — full recommendation */}
-      {data.eligible && instruments.length > 0 && (
+      {/* Eligible — multi-option recommendation */}
+      {data.eligible && options.length > 0 && (
         <div className="p-5 space-y-6">
 
-          {/* Stats row */}
+          {/* Stats row — universe level (same across all options) */}
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: 'Recommended',     value: instruments.length },
-              { label: 'Universe Scored', value: data.total_instruments_evaluated ?? '—' },
-              { label: 'Already Held',    value: data.instruments_excluded_existing_holdings ?? 0 },
+              { label: 'Options Generated',  value: options.length },
+              { label: 'Universe Scored',    value: data.total_instruments_evaluated ?? '—' },
+              { label: 'Already Held',       value: data.instruments_excluded_existing_holdings ?? 0 },
             ].map(({ label, value }) => (
               <div
                 key={label}
@@ -202,28 +207,57 @@ export default function RecommendationPanel({ data }) {
             ))}
           </div>
 
-          {/* Allocation bar */}
+          {/* Option tabs */}
           <div>
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-              Suggested Allocation
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+              Portfolio Options
             </div>
-            <AllocationBar instruments={instruments} />
-            {data.allocation_summary && (
-              <p className="text-xs text-slate-500 mt-2 italic">{data.allocation_summary}</p>
+            <div className="flex flex-wrap gap-2">
+              {options.map((opt, i) => (
+                <button
+                  key={opt.option_id ?? i}
+                  onClick={() => setSelectedIdx(i)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                    i === selectedIdx
+                      ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400 hover:text-slate-800'
+                  }`}
+                >
+                  {opt.option_name ?? `Option ${i + 1}`}
+                </button>
+              ))}
+            </div>
+            {activeOpt?.strategy_description && (
+              <p className="text-xs text-slate-500 mt-2 italic">{activeOpt.strategy_description}</p>
             )}
           </div>
 
-          {/* Instrument cards */}
-          <div>
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-              Recommended Instruments
+          {/* Allocation bar for selected option */}
+          {instruments.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                Suggested Allocation
+              </div>
+              <AllocationBar instruments={instruments} />
+              {activeOpt?.allocation_summary && (
+                <p className="text-xs text-slate-500 mt-2 italic">{activeOpt.allocation_summary}</p>
+              )}
             </div>
-            <div className="space-y-3">
-              {instruments.map((inst, i) => (
-                <InstrumentCard key={inst.fund_id ?? i} inst={inst} rank={i + 1} />
-              ))}
+          )}
+
+          {/* Instrument cards for selected option */}
+          {instruments.length > 0 && (
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                Recommended Instruments · {instruments.length} funds
+              </div>
+              <div className="space-y-3">
+                {instruments.map((inst, i) => (
+                  <InstrumentCard key={`${selectedIdx}-${inst.fund_id ?? i}`} inst={inst} rank={i + 1} />
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
         </div>
       )}

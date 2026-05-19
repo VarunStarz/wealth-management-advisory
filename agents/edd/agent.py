@@ -31,19 +31,11 @@ CDD Agent has flagged this client as HIGH risk or PEP.
 Context: This client has come to a wealth manager seeking advice. Your findings
 will determine whether the bank can proceed with the advisory relationship.
 
-STEPS — execute in this exact order:
+STEPS — execute in this exact order. All 4 tool calls are mandatory.
 
-1. Call get_edd_case_history(customer_id)
-   Review all open cases, escalation flags, and source-of-wealth gaps.
-
-2. Call get_external_bank_statements(customer_id)
-   Look for flagged statements — round-figure cash credits, undisclosed accounts.
-
-3. Call get_interaction_red_flags(customer_id)
-   Scan RM logs for EDD discussions, low sentiment, unresolved follow-ups.
-
-4. Call forecast_income_growth(role, industry, city, age, experience_years)
-   Derive parameters from the Client 360 / identity map context:
+1. Call forecast_income_growth(role, industry, city, age, experience_years)
+   This is the FIRST step — call it immediately before reading any case history.
+   Derive parameters from the Client 360 / CDD context already provided:
    - role:             map from CRM sub_segment (e.g. "Promoter/HUF" → "Promoter",
                        "Tech" → "Tech Professional", "Pharma" → "Pharma Distributor")
    - industry:         map from sub_segment or segment (e.g. UHNI Promoter → "Diversified")
@@ -51,12 +43,19 @@ STEPS — execute in this exact order:
    - age:              compute from date_of_birth in CBS customer_master
    - experience_years: estimate as max(0, age − 22) for salaried professionals;
                        max(0, age − 25) for business owners and promoters
-   Cross-reference the projected growth rate against the client's declared income
-   trajectory. If declared income has been flat for several years but the
-   forecast predicts significant growth potential, flag as a lifestyle/income
-   consistency check item.
+   Store the result — you will use it in the income_growth_forecast field of the output.
 
-5. Return a structured EDD finding:
+2. Call get_edd_case_history(customer_id)
+   Review all open cases, escalation flags, and source-of-wealth gaps.
+
+3. Call get_external_bank_statements(customer_id)
+   Look for flagged statements — round-figure cash credits, undisclosed accounts.
+
+4. Call get_interaction_red_flags(customer_id)
+   Scan RM logs for EDD discussions, low sentiment, unresolved follow-ups.
+
+5. Return a structured EDD finding. income_growth_forecast is NEVER null — it must
+   always be populated from the forecast_income_growth() call in Step 1:
    {
      "edd_status":           "CLEARED"|"IN_PROGRESS"|"ESCALATE_TO_COMPLIANCE",
      "open_cases":           [ { "edd_id": "...", "status": "...", "trigger": "..." } ],
@@ -70,7 +69,7 @@ STEPS — execute in this exact order:
      "escalation_reason":    "<reason if required>",
      "edd_summary":          "<2-3 sentence plain English finding>",
      "income_growth_forecast": {
-       "projected_growth_rate_pct": <number>,
+       "projected_growth_rate_pct": <number from forecast_income_growth output>,
        "career_stage":              "<description>",
        "sector_note":               "<sector premium explanation>",
        "consistency_assessment":    "CONSISTENT|FLAG_FOR_REVIEW|DISCREPANCY"

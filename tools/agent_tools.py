@@ -617,7 +617,7 @@ def forecast_income_growth(
     try:
         req = urllib.request.Request(
             "https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/IND",
-            headers={"User-Agent": "Mozilla/5.0"},
+            # OLD: headers={"User-Agent": "Mozilla/5.0"},  # IMF blocks Mozilla UA (returns 403)
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
             imf = json.loads(resp.read().decode())
@@ -1361,9 +1361,11 @@ def fetch_benchmark_returns(risk_tier: str) -> str:
         logger.debug("← fetch_benchmark_returns: LOW — returning hardcoded 7.5%%")
         return result
 
-    # MEDIUM → Nifty 500 (^CNX500), HIGH → Nifty 50 (^NSEI)
+    # OLD: # MEDIUM → Nifty 500 (^CNX500), HIGH → Nifty 50 (^NSEI)
+    # MEDIUM → Nifty 500 (^CRSLDX, replaces delisted ^CNX500), HIGH → Nifty 50 (^NSEI)
     ticker_map = {
-        "MEDIUM": ("^CNX500",  "Nifty 500 Index",  12.5),
+        # OLD: "MEDIUM": ("^CNX500",  "Nifty 500 Index",  12.5),
+        "MEDIUM": ("^CRSLDX",  "Nifty 500 Index",  12.5),
         "HIGH":   ("^NSEI",    "Nifty 50 Index",   15.0),
     }
     ticker, bench_name, fallback_cagr = ticker_map.get(tier, ticker_map["MEDIUM"])
@@ -1486,7 +1488,8 @@ def fetch_india_inflation_forecast() -> str:
     gdp_source = "IMF WEO (hardcoded fallback)"
 
     try:
-        req = urllib.request.Request(IMF_URL, headers={"User-Agent": "Mozilla/5.0"})
+        # OLD: req = urllib.request.Request(IMF_URL, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(IMF_URL)  # IMF blocks Mozilla UA (returns 403); use default
         with urllib.request.urlopen(req, timeout=10) as resp:
             imf_data = json.loads(resp.read().decode())
 

@@ -6,9 +6,10 @@ The only keyed API is Google Gemini (GOOGLE_API_KEY) used by all agents.
 
 
 ──────────────────────────────────────────────────────────────────────────────
-1. Yahoo Finance — Nifty 500 (^CNX500)
+1. Yahoo Finance — Nifty 500 (^CRSLDX)
 ──────────────────────────────────────────────────────────────────────────────
-URL       : https://query1.finance.yahoo.com/v8/finance/chart/^CNX500?range=3y&interval=1mo
+URL       : https://query1.finance.yahoo.com/v8/finance/chart/^CRSLDX?range=3y&interval=1mo
+            (formerly ^CNX500, which was delisted on Yahoo Finance)
 Function  : fetch_benchmark_returns(risk_tier="MEDIUM")
 Phase     : Phase 2 — Risk preference screen + benchmark returns
 
@@ -79,7 +80,9 @@ Why selected:
   (portfolio real return vs. GDP growth backdrop).
 
 Fallback  : Hardcoded 7.2% (RBI/IMF consensus estimate) if call fails.
-Auth      : None required. Returns HTTP 403 intermittently (rate-limited).
+Auth      : None required. Must be called without a browser User-Agent header —
+            the IMF CDN returns HTTP 403 for Mozilla/5.0 UA strings. Python's
+            default urllib UA (Python-urllib/3.x) is accepted.
 
 
 ──────────────────────────────────────────────────────────────────────────────
@@ -98,7 +101,7 @@ Why selected:
   for this base rate, making the forecast credible for compliance use.
 
 Fallback  : Hardcoded 7.2% GDP base if call fails.
-Auth      : None required. Same endpoint as #4 above.
+Auth      : None required. Same endpoint and UA constraint as #4 above.
 
 
 ──────────────────────────────────────────────────────────────────────────────

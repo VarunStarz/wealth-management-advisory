@@ -202,6 +202,80 @@ def _sanctions_fail(cdd_output: str) -> bool:
     return _extract_json(cdd_output).get("cdd_status", "") == "FAIL"
 
 
+def _fix_wr_metrics(raw: str, investable_amount: float | None) -> str:
+    """
+    Post-processes portfolio_recommendation JSON after the LLM returns it.
+    Recomputes all 5 option-level metrics in Python (LLM arithmetic is unreliable),
+    then sorts options by portfolio_sharpe_approx descending and renumbers 1-4.
+    No-ops if JSON is unparsable or eligible=false.
+    """
+    import re as _re
+
+    def _inr(n: float) -> str:
+        n = int(round(n))
+        if n < 0:
+            return "Rs.-" + _inr(-n)[3:]
+        s = str(n)
+        if len(s) <= 3:
+            return f"Rs.{s}"
+        result = s[-3:]
+        s = s[:-3]
+        while len(s) > 2:
+            result = s[-2:] + "," + result
+            s = s[:-2]
+        if s:
+            result = s + "," + result
+        return f"Rs.{result}"
+
+    data = _extract_json(raw)
+    if not data or not data.get("eligible") or not data.get("options"):
+        return raw
+
+    # Resolve investable amount from JSON if not passed explicitly
+    if not investable_amount:
+        amt_str = _re.sub(r"[^0-9]", "", data.get("investable_amount_inr", ""))
+        investable_amount = float(amt_str) if amt_str else None
+    if not investable_amount:
+        return raw
+
+    for opt in data["options"]:
+        insts = opt.get("recommended_instruments") or []
+        if not insts:
+            continue
+
+        # Weighted expected return
+        ret = round(
+            sum((i.get("suggested_allocation_pct") or 0) / 100.0
+                * (i.get("cagr_3yr_pct") or 0.0)
+                for i in insts), 2)
+
+        # Weighted max drawdown (negative value)
+        dd = round(
+            -1.0 * sum((i.get("suggested_allocation_pct") or 0) / 100.0
+                       * abs(i.get("max_drawdown_pct") or 0.0)
+                       for i in insts), 2)
+
+        # Portfolio Sharpe approx
+        sharpe = round(ret / max(abs(dd), 0.5), 2)
+
+        # Projected corpus (compound, 3 years), rounded to nearest Rs.1,000
+        corpus = round(investable_amount * (1 + ret / 100.0) ** 3 / 1000) * 1000
+        gain   = corpus - investable_amount
+
+        opt["expected_portfolio_return_pct"]    = ret
+        opt["expected_portfolio_max_drawdown_pct"] = dd
+        opt["portfolio_sharpe_approx"]          = sharpe
+        opt["projected_corpus_3yr_inr"]         = _inr(corpus)
+        opt["projected_gain_3yr_inr"]           = _inr(gain)
+
+    # Sort descending by Sharpe, renumber 1-4
+    data["options"].sort(key=lambda o: o.get("portfolio_sharpe_approx") or 0, reverse=True)
+    for idx, opt in enumerate(data["options"], 1):
+        opt["option_id"] = idx
+
+    return json.dumps(data, ensure_ascii=False)
+
+
 # ── Pipeline ──────────────────────────────────────────────────
 async def run_pipeline(
     customer_id: str,
@@ -387,7 +461,7 @@ async def run_pipeline(
             app_name=APP_NAME, user_id=rm_id, session_id=sid
         )
         amt_str = f"Rs.{int(investable_amount_inr):,}" if investable_amount_inr else "not specified"
-        outputs["portfolio_recommendation"] = await _run_agent_with_retry(
+        _raw_rec = await _run_agent_with_retry(
             portfolio_recommendation_agent, rm_id, sid,
             f"Customer ID: {customer_id}\n"
             f"Investable amount: {amt_str}\n"
@@ -396,6 +470,7 @@ async def run_pipeline(
             f"CDD findings:\n{outputs.get('cdd', '')}\n\n"
             f"Generate the portfolio recommendation for this customer."
         )
+        outputs["portfolio_recommendation"] = _fix_wr_metrics(_raw_rec, investable_amount_inr)
         print("     ✓ Portfolio Recommendation done")
 
     # ── STEP 4: Risk Assessment (skipped for WEALTH_RECOMMENDATION) ──

@@ -1689,7 +1689,8 @@ def get_fund_universe(risk_tier: str) -> str:
         f"SELECT fund_id, scheme_code, instrument_name, short_name, category, "
         f"asset_class, amc, risk_tier, instrument_type, data_source, "
         f"static_return_pct, min_investment_inr "
-        f"FROM fund_master WHERE risk_tier IN ({placeholders}) AND is_active = TRUE "
+        f"FROM fund_master WHERE (risk_tier IN ({placeholders}) OR asset_class = 'SAFE') "
+        f"AND is_active = TRUE "
         f"AND instrument_name NOT ILIKE '%%Employee Provident Fund%%' "
         f"ORDER BY risk_tier, asset_class, fund_id",
         tuple(eligible_tiers))

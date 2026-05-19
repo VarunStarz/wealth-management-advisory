@@ -1,0 +1,332 @@
+  Algorithms Used in the Wealth Platform
+
+  ---
+  2. Multi-Attribute Probabilistic Entity Resolution
+
+  File: tools/entity_resolution.py — resolve_identity(), _candidates_*(), _score_*(), _resolve_system()
+  Purpose: Links a CBS customer record to its counterpart in KYC, Card, and DMS systems without a shared customer_id column — identifying the
+  same person across 6 databases.
+
+  Algorithm steps:
+  1. Blocking: Generate a candidate pool per system using union of 3 keys (PAN exact, DOB exact for KYC, first-word / last-word ILIKE name
+  search). Deduplication by primary key.
+  2. Attribute weighting and scoring:
+
+  | System   | Attribute                | Score |
+  |----------|--------------------------|-------|
+  | KYC      | PAN exact                | +0.45 |
+  | KYC      | Name JW ≥ 0.90           | +0.35 |
+  | KYC      | Name JW 0.70–0.89        | +0.18 |
+  | KYC      | Name JW 0.55–0.69        | +0.08 |
+  | KYC      | DOB exact                | +0.20 |
+  | KYC      | DOB month/day transposed | +0.08 |
+  | Card/DMS | PAN exact                | +0.55 |
+  | Card/DMS | Name JW ≥ 0.90           | +0.45 |
+  | Card/DMS | Name JW 0.70–0.89        | +0.32 |
+  | Card/DMS | Name JW 0.50–0.69        | +0.16 |
+
+  3. Tier classification: Best-scoring candidate assigned a resolution tier:
+    - CONFIRMED (score ≥ 0.75) — auto-accepted
+    - AMBIGUOUS (0.30–0.74) — passed to Gemini LLM for arbitration
+    - NOT_FOUND (< 0.30) — flagged as identity gap
+  4. LLM arbitration: For AMBIGUOUS cases, the client_360_agent reasons over the candidate pool, citing PAN/name/DOB evidence, and sets method
+  = LLM_ARBITRATION.
+
+  ---
+  3. Composite 360-Degree Risk Scoring
+
+  File: tools/agent_tools.py — compute_composite_risk_score()
+  Purpose: Aggregates live signals from all six databases into a single numeric risk score for the client.
+
+  Algorithm: Additive signal model starting from the KYC base score:
+
+  ┌───────────────────────────────┬─────────────────┐
+  │            Signal             │ Score Increment │
+  ├───────────────────────────────┼─────────────────┤
+  │ PEP flag present              │ +20             │
+  ├───────────────────────────────┼─────────────────┤
+  │ Open EDD case (escalated)     │ +15             │
+  ├───────────────────────────────┼─────────────────┤
+  │ KYC status = UNDER_REVIEW     │ +10             │
+  ├───────────────────────────────┼─────────────────┤
+  │ Re-KYC overdue                │ +12             │
+  ├───────────────────────────────┼─────────────────┤
+  │ Liability DPD above threshold │ +8              │
+  ├───────────────────────────────┼─────────────────┤
+  │ NPA flag on liability         │ +20             │
+  ├───────────────────────────────┼─────────────────┤
+  │ Adverse media hit             │ +5              │
+  └───────────────────────────────┴─────────────────┘
+
+  Score is capped at 100. Risk tier mapping: LOW (0–39), MEDIUM (40–59), HIGH (60–79), VERY_HIGH (80+). Red flags sorted HIGH → MEDIUM → LOW.
+
+  ---
+  4. CIBIL Score Mapping and Five-Factor Credit Model
+
+  File: tools/agent_tools.py — get_cibil_credit_profile()
+  Purpose: Maps the internal KYC risk score to the CIBIL scale (300–900) and computes five granular credit health signals for the AI forecast.
+
+  Formulas:
+  - CIBIL equivalent: 900 − (risk_score / 100) × 600
+  - Payment history score: max(0, 100 − dpd_card_months × 15 − min_pay_months × 5)
+  - Credit utilisation: (total_card_balance / total_credit_limit) × 100
+  - Credit age: (today − customer_since_date).days / 365.25
+  - Credit mix score: Distinct account types counted across loans + cards → 0 types = 0, 1 type = 40, 2 types = 70, ≥3 types = 100
+  - Derogatory marks: npa_count + dpd_severe_count (DPD > 90 days)
+
+  Credit health mapping: EXCELLENT (750–900), GOOD (700–749), FAIR (650–699), POOR (600–649), CRITICAL (300–599).
+
+  ---
+  5. CIBIL AI Forecast — Multi-Factor Rule Engine
+
+  File: agents/cibil/agent.py
+  Purpose: Produces a forward-looking credit direction (IMPROVING / STABLE / DETERIORATING) from the five-factor signals.
+
+  Decision rules:
+  - DETERIORATING: payment_history_score < 70 AND utilisation > 80; any derogatory marks; NPA count > 0 (override, always DETERIORATING);
+  dpd_card_months > 3; CRITICAL health with overdue re-KYC
+  - STABLE: payment 70–89 AND utilisation 30–79 AND no derogatory marks; FAIR health with no DPD and utilisation < 50%; credit age > 5yr with
+  no marks
+  - IMPROVING: credit age > 10yr AND utilisation < 30 AND no marks; payment_history ≥ 90 AND utilisation < 30; credit mix ≥ 70 AND no marks
+  - Composite rules: credit age < 2yr AND mix < 40 → thin-file flag; utilisation > 80 AND derogatory > 0 AND dpd_severe > 0 → CRITICAL
+  deterioration
+
+  ---
+  6. Fund Composite Scoring — Weighted Scoring Model
+
+  File: agents/portfolio_recommendation/agent.py
+  Purpose: Ranks every instrument in the universe on a 0–100 scale to determine the top pick per asset class bucket.
+
+  Formula:
+
+  ┌───────────────────────────────┬────────┬───────────────────────────────────────────────────────────────┐
+  │           Component           │ Weight │                            Formula                            │
+  ├───────────────────────────────┼────────┼───────────────────────────────────────────────────────────────┤
+  │ Return Score                  │ 40%    │ min(cagr_3yr_pct / 20.0, 1.0) × 100                           │
+  ├───────────────────────────────┼────────┼───────────────────────────────────────────────────────────────┤
+  │ Risk Efficiency (Sharpe-like) │ 30%    │ min(cagr_3yr_pct / max(volatility_pct, 0.5), 3.0) / 3.0 × 100 │
+  ├───────────────────────────────┼────────┼───────────────────────────────────────────────────────────────┤
+  │ Capital Protection            │ 30%    │ max(0, min(100, 100 − abs(max_drawdown_pct) × 2))             │
+  └───────────────────────────────┴────────┴───────────────────────────────────────────────────────────────┘
+
+  Composite = (Return × 0.40) + (RiskEfficiency × 0.30) + (CapProtection × 0.30)
+
+  For static instruments (PPF, FDs, NSC): volatility = 0, so fixed risk efficiency = 75; drawdown = 0, so capital protection = 100.
+
+  ---
+  7. Multi-Option Portfolio Construction Algorithm
+
+  File: agents/portfolio_recommendation/agent.py
+  Purpose: Constructs up to 4 named strategy options per risk tier, each with a distinct asset class allocation.
+
+  Steps:
+  1. Strategy templates are selected by risk tier (NO_RISK: 2 options, LOW: 3, MEDIUM: 4, HIGH: 4), each defining fixed asset class weights.
+  2. For each bucket, the top-scoring instrument (from Algorithm 6) is assigned. Concentration rule: any bucket > 35% → split across two
+   instruments in the same class.
+  3. Amount allocation: suggested_amount = investable_amount × (allocation_pct / 100), rounded to nearest Rs. 1,000. Largest bucket absorbs any
+   rounding remainder so total always sums exactly.
+  4. Existing holdings exclusion: instruments already owned in the same category are removed before scoring. Universe
+   construction rule: SAFE-class instruments (PPF, NSC, FDs, RBI Bonds) are always included regardless of the client's
+   risk tier — the fund universe SQL applies `OR asset_class = 'SAFE'` so that guaranteed-return instruments are
+   available to every client, including MEDIUM and HIGH risk tiers.
+  5. These template-driven options are pooled with the Sharpe-Optimised option from Algorithm 21. All pooled options undergo:
+     (a) Distinctness check: two options pruned if they share all the same fund IDs AND all allocation buckets differ by < 10%.
+     (b) Ranking by Portfolio Sharpe Approx = expected_return / max(|weighted_drawdown|, 0.5), descending.
+     (c) Trim to at most 4 options; renumbered 1–4.
+  6. Option-level metrics computed for every surviving option: expected_portfolio_return_pct = Σ(alloc/100 × cagr_3yr);
+   projected_corpus_3yr = investable × (1 + return/100)³; projected_gain = corpus − investable. Formatted in Indian notation.
+   All five metrics are recomputed deterministically by a Python post-processor (_fix_wr_metrics in main.py) after the
+   LLM returns the raw option structure, ensuring arithmetic accuracy independent of LLM calculation. Sorting by
+   Portfolio Sharpe Approx descending and renumbering 1–4 is also performed in this post-processing pass.
+
+  ---
+  8. CAGR Calculation from NAV History
+
+  File: tools/agent_tools.py — fetch_fund_performance()
+  Purpose: Computes trailing 3-year and 1-year CAGR for mutual funds using daily NAV data from MFAPI.in.
+
+  Formula:
+  - cagr_3yr = ((latest_nav / nav_3yr_ago) ^ (1/3) − 1) × 100
+  - cagr_1yr = ((latest_nav / nav_1yr_ago) − 1) × 100
+  - NAVs matched to exact date or nearest earlier trading day.
+
+  For index benchmarks (Yahoo Finance): cagr = ((last_close / first_close) ^ (1 / years) − 1) × 100
+
+  ---
+  9. Annualised Volatility from Daily Returns
+
+  File: tools/agent_tools.py — fetch_fund_performance()
+  Purpose: Measures fund return variability over the 3-year window.
+
+  Formula:
+  1. Daily returns: r_i = (nav_i / nav_{i+1}) − 1
+  2. Variance: σ² = Σ(r_i − mean)² / n
+  3. Annualised: volatility = sqrt(σ²) × sqrt(252) × 100 (252 = approximate trading days per year)
+
+  ---
+  10. Maximum Drawdown Algorithm
+
+  File: tools/agent_tools.py — fetch_fund_performance()
+  Purpose: Measures the worst peak-to-trough NAV decline over the 3-year window.
+
+  Algorithm: Linear scan over NAVs in chronological order, tracking a running peak. At each NAV: drawdown = (nav − peak) / peak × 100. The
+  minimum (most negative) value is recorded as max_drawdown_pct.
+
+  ---
+  11. Income Discrepancy Detection
+
+  File: tools/agent_tools.py — detect_income_discrepancy()
+  Purpose: Flags clients whose declared income is inconsistent with lifestyle signals.
+
+  Formulas:
+  - Inferred income: monthly_card_spend × 12 × 3 (heuristic: card spend is ~33% of income)
+  - Gap percentage: ((inferred − declared) / declared) × 100
+  - Flag trigger: abs(gap_pct) > 30% (configurable threshold)
+  - Direction: OVER_DECLARED (gap < −30%), UNDER_DECLARED (gap > +30%), CONSISTENT
+
+  ---
+  12. Income Growth Forecast Model
+
+  File: tools/agent_tools.py — forecast_income_growth()
+  Purpose: Projects a client's expected income growth rate for EDD cross-referencing, using macroeconomic and career-stage signals.
+
+  Formula: growth_rate = (gdp_base × career_multiplier) + sector_premium
+
+  ┌──────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │    Component     │                                                       Values                                                        │
+  ├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ GDP base         │ IMF WEO API (NGDP_RPCH/IND); fallback 7.2%                                                                          │
+  ├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Career           │ 1.3× (age ≤ 35, exp < 10yr), 1.1× (≤ 45, < 20yr), 0.9× (≤ 55, < 30yr), 0.7× (late career)                           │
+  │ multiplier       │                                                                                                                     │
+  ├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Sector premium   │ +2% (Tech/Finance/Legal/Pharma/Healthcare), 0% (Govt/Education), −1% (Retail/Manufacturing/Media), +0.5%            │
+  │                  │ (Diversified)                                                                                                       │
+  └──────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  Forecast horizon: max(1, min(55 − age, 10)) years.
+
+  ---
+  13. Real Return Calculation
+
+  File: agents/report_generation/agent.py
+  Purpose: Adjusts nominal portfolio returns for inflation to show actual purchasing power growth.
+
+  Formula: real_return = portfolio_nominal_return − current_CPI
+
+  CPI sourced live from World Bank API (FP.CPI.TOTL.ZG), with 5-year average used as forecast. Fallback: 4.5% (RBI MPC projection).
+
+  ---
+  14. Employer Stability Classification
+
+  File: tools/agent_tools.py — validate_employer_stability()
+  Purpose: Assesses income sustainability by checking whether the employer is a real, registered entity.
+
+  Two-stage algorithm:
+  1. NSE EQUITY_L.csv lookup: Downloads the full NSE-listed company list and performs normalised substring matching (strips legal suffixes like
+   "Ltd", "Pvt", "LLP" before comparison). Match → HIGH stability.
+  2. Incorporation type heuristic (fallback): Pattern match on employer name suffix: Ltd/Limited → HIGH, LLP → MEDIUM, Pvt/Private → MEDIUM, &
+  Sons/Trading/Enterprises → LOW, unknown → UNKNOWN.
+
+  ---
+  15. Portfolio Concentration Risk Detection
+
+  File: tools/agent_tools.py — get_portfolio_holdings()
+  Purpose: Identifies portfolios where a single instrument dominates, creating concentration risk.
+
+  Rule: Any holding with weight_pct > 45% is flagged as a concentrated bet. The portfolio analysis agent then maps this to a CONCENTRATION RISK
+   suitability flag.
+
+  ---
+  16. Portfolio Suitability Rules
+
+  File: agents/portfolio_analysis/agent.py
+  Purpose: Detects mismatches between the client's stated risk appetite and their actual portfolio composition.
+
+  Rules:
+  - Alpha < 0 for 2+ consecutive periods → underperformance flag
+  - Sharpe ratio < 1.0 → risk-adjusted return concern
+  - Equity weight > 80% for CONSERVATIVE risk appetite → suitability mismatch
+  - Equity weight < 40% for AGGRESSIVE risk appetite → underutilisation flag
+
+  ---
+  17. Cross-Signal Compound Risk Pattern Detection
+
+  File: agents/risk_assessment/agent.py
+  Purpose: Detects multi-dimensional risk that no single metric would catch alone.
+
+  Eight compound patterns evaluated:
+  1. High card spend + low declared income + open EDD case → compound risk
+  2. PEP + offshore interest + large unexplained credits → enhanced scrutiny
+  3. Re-KYC overdue + expired passport + complex corporate structure → documentation risk
+  4. Portfolio concentrated + risk appetite mismatch + EDD open → multi-layered risk
+  5. NPA on loans + cash advances on card + CIBIL deterioration → credit crisis signal
+  6. Total EMI > 50% of declared income + minimum-only payments → debt stress
+  7. Lifestyle spend (card) exceeds declared income → lifestyle mismatch
+  8. CIBIL equivalent < 600 + DPD on loans + DPD on card → compound credit default risk
+
+  ---
+  18. Scope-Driven Pipeline Orchestration
+
+  File: main.py — run_pipeline()
+  Purpose: Determines which agents run, in what order, and in parallel, based on the detected query scope.
+
+  Logic:
+  - Step 1: Always runs Guardrail → Client 360 agents sequentially.
+  - Step 2: Runs a parallel async batch of agents based on scope: FULL_BRIEFING runs all 6 (CDD, Income, Portfolio, Loans, Expenditure, CIBIL);
+   narrower scopes run subsets.
+  - Step 3 (conditional): EDD agent runs only if _edd_triggered(cdd_output) == True (checks for edd_trigger: true in CDD JSON). If a sanctions
+  hit is detected, the pipeline hard-exits immediately.
+  - Step 3b (WEALTH_RECOMMENDATION only): Portfolio Recommendation agent runs after CDD.
+  - Step 4: Risk Assessment agent aggregates all outputs.
+  - Step 5: Report Generation agent synthesises the final JSON briefing.
+
+  ---
+  19. Query Intent Classification and Amount Extraction
+
+  File: agents/guardrail/agent.py — validate_query() + LLM guardrail
+  Purpose: Classifies every incoming RM query into a pipeline type and blocks out-of-scope requests before any analysis runs.
+
+  Two-stage process:
+  1. Programmatic pre-check: Query length bounds, blocked keyword list (GUARDRAIL_RULES["blocked_intents"]), before the LLM sees anything.
+  2. LLM intent classification: Determines pipeline type (FULL_BRIEFING, WEALTH_RECOMMENDATION, CDD_ONLY, etc.) and extracts structured fields
+  like customer_id and investable_amount_inr. Numeric amount extraction rules: "15 lakh" → 1,500,000; "1.5 crore" → 15,000,000.
+
+  ---
+  20. 24-Hour Performance Data Cache (TTL Memoization)
+
+  File: tools/agent_tools.py — fetch_fund_performance() + _write_fund_performance_cache()
+  Purpose: Avoids 30–40 seconds of MFAPI.in latency on repeated pipeline runs by caching computed NAV metrics.
+
+  Strategy: Before fetching live data, checks fund_performance_cache table for a row where expires_at > NOW(). Cache miss triggers a live
+  MFAPI.in fetch; the result is written back with expires_at = NOW() + INTERVAL '24 hours'. Cache hit returns immediately without any external
+  API call.
+
+  ---
+  ---
+  21. Sharpe-Optimised Portfolio Allocation
+
+  File: agents/portfolio_recommendation/agent.py (Step 5b)
+  Purpose: Generates one data-driven portfolio option by deriving asset class weights from each fund's Sharpe proxy, complementing the
+  fixed templates of Algorithm 7.
+
+  Steps:
+  1. Per-fund Sharpe proxy: For market-traded funds, sharpe_i = cagr_3yr_pct / max(volatility_pct, 0.5). For static instruments (PPF, FDs,
+   NSC), sharpe_i = cagr_3yr_pct / 1.5 (synthetic volatility floor for guaranteed-return instruments).
+  2. Class representative: The fund with the highest composite score (Algorithm 6) in each asset class is the representative; its Sharpe
+   proxy becomes the class weight input.
+  3. Raw weights: raw_pct_class = (sharpe_class / Σ sharpe_all_classes) × 100.
+  4. Risk-tier constraints (client's tier is read-only — never overridden):
+     NO_RISK — EQUITY ceiling = 0%, HYBRID ceiling = 0%, SAFE floor = 55%.
+     LOW — EQUITY ceiling = 15%, SAFE+DEBT combined floor = 60%.
+     MEDIUM — EQUITY floor = 10%, EQUITY ceiling = 60%.
+     HIGH — EQUITY floor = 25%, EQUITY ceiling = 80%.
+     Surplus redistributed to GOLD or DEBT; all weights re-normalised to sum exactly 100%.
+  5. Rounding: weights rounded to nearest 5%; rounding residual absorbed by the largest non-zero bucket.
+  6. Output: one option named "Sharpe Maximiser" (algorithm = "SHARPE_OPTIMISED"). Pooled with Algorithm 7 options, ranked by Portfolio
+   Sharpe Approx, and competes for one of the 4 final recommendation slots.
+
+  ---
+  Summary count: 21 algorithms spanning string matching, probabilistic entity resolution, multi-factor scoring models, financial mathematics
+  (CAGR, volatility, drawdown), macroeconomic forecasting, rule-based classifiers, portfolio optimisation (Sharpe-weighted allocation), and
+  pipeline orchestration logic.

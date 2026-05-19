@@ -1,0 +1,158 @@
+AI-POWERED ENTITY RESOLUTION — JARO-WINKLER PROBABILISTIC ENGINE
+==================================================================
+Implementation file : tools/entity_resolution.py
+Called by           : tools/agent_tools.py → get_identity_resolution_map()
+LLM arbitration in  : agents/client_360/agent.py
+Ambiguity seed data : scripts/seed_ambiguous_records.py
+
+
+PROBLEM STATEMENT
+──────────────────────────────────────────────────────────────────────────────
+A wealth management client exists across six independent systems (CBS, CRM, KYC,
+Card, DMS, PMS). These systems were built by different teams at different times
+and do not share a common key. The earlier implementation used a single-attribute
+PAN-number exact match, which fails when:
+  - The PAN column is NULL or was not captured at the time of record creation
+  - A name was entered in a different transliteration (e.g. "Anita" vs "Anitha")
+  - A name was abbreviated (e.g. "Priya Suresh Iyer" vs "PRIYA S IYER")
+  - A middle name was dropped (e.g. "Deepika Rajan Pillai" vs "Deepika Pillai")
+
+The replacement engine uses multi-attribute probabilistic scoring with LLM
+arbitration for cases that fall in an uncertain zone.
+
+
+HOW JARO-WINKLER SIMILARITY WORKS
+──────────────────────────────────────────────────────────────────────────────
+Step 1 — Jaro Score:
+  Counts matching characters between two strings within a sliding window,
+  then penalises for transpositions (matched characters out of order).
+
+  Formula:
+    Jaro(s1, s2) = (m/|s1| + m/|s2| + (m - t/2)/m) / 3
+    where m = matching characters, t = transpositions
+
+  Examples:
+    "ANITA NAIR"  vs "ANITHA NAIR"  → Jaro ≈ 0.97   (extra 'H' is minor)
+    "PRIYA IYER"  vs "PRIYA S IYER" → Jaro ≈ 0.94   (inserted middle initial)
+    "DEEPIKA PILLAI" vs "DEEPIKA RAJAN PILLAI" → Jaro ≈ 0.87  (middle name dropped)
+    "ANITA NAIR"  vs "JOHN SMITH"   → Jaro ≈ 0.30   (unrelated strings)
+
+Step 2 — Winkler Prefix Boost:
+  Adds a bonus when strings share a common prefix (up to 4 characters), because
+  names that start the same are more likely to be the same person.
+
+  Formula:
+    JaroWinkler = Jaro + (prefix_length × 0.1 × (1 - Jaro))
+
+  Result: scores range from 0.0 (completely different) to 1.0 (identical).
+  The implementation is pure Python (_jaro, _jaro_winkler functions) with no
+  external library dependencies. All strings are uppercased and stripped before
+  comparison to eliminate case and whitespace artefacts.
+
+
+BLOCKING STRATEGY (pre-filtering before scoring)
+──────────────────────────────────────────────────────────────────────────────
+Full cross-product comparison across all records would be O(n²). A blocking
+strategy first narrows candidates to a small set, then scores only those.
+
+  KYC system:
+    Block on: PAN exact match  AND  DOB exact match  AND  first-word of name ILIKE
+    Rationale: KYC records usually capture PAN and DOB; blocking on all three
+               ensures only credible candidates are scored.
+
+  Card system:
+    Block on: PAN exact match  OR  (first-word ILIKE  AND  last-word/surname ILIKE)
+    Rationale: Card records sometimes lack PAN (not captured at issuance).
+               The surname fallback block catches abbreviated names like
+               "PRIYA S IYER" for a customer whose full name is "Priya Suresh Iyer".
+
+  DMS system:
+    Same blocking logic as Card.
+
+
+WEIGHT TABLE — HOW SCORES ARE COMPUTED
+──────────────────────────────────────────────────────────────────────────────
+After blocking, each candidate is scored by summing weighted signals:
+
+  KYC weight table:
+    pan_exact match          : +0.45
+    name JW ≥ 0.90 (high)   : +0.35
+    name JW 0.70–0.89 (mid) : +0.18
+    name JW 0.55–0.69 (low) : +0.08
+    dob_exact match          : +0.20
+    dob_transposed (dd/mm)   : +0.08
+
+  Card / DMS weight table:
+    pan_exact match          : +0.55
+    name JW ≥ 0.90 (high)   : +0.45
+    name JW 0.70–0.89 (mid) : +0.32
+    name JW 0.50–0.69 (partial): +0.16
+
+  Maximum possible score is > 1.0 when multiple strong signals align.
+  Scores are not normalised — the raw sum is used for tier classification.
+
+
+CONFIDENCE TIERS
+──────────────────────────────────────────────────────────────────────────────
+  CONFIRMED   : score ≥ 0.75  →  accepted automatically; method = "CONFIRMED"
+  AMBIGUOUS   : score 0.30–0.74  →  sent to LLM for arbitration; method = "LLM_ARBITRATION"
+  NOT_FOUND   : score < 0.30  →  no credible match; added to identity_gaps; method = "NOT_FOUND"
+
+
+LLM ARBITRATION (AMBIGUOUS cases)
+──────────────────────────────────────────────────────────────────────────────
+When a record lands in the AMBIGUOUS zone, the Client 360 agent (Gemini LLM)
+receives the candidate details (name, JW score, PAN presence/absence, DOB) and
+reasons about the combination of evidence. It produces:
+
+  - method      : "LLM_ARBITRATION"
+  - confidence  : the numeric score from the engine
+  - reasoning   : a human-readable sentence explaining the decision
+                  e.g. "Middle name initial 'S' is consistent with 'Suresh';
+                        PAN absent from card record but name pattern matches —
+                        linking with medium confidence."
+
+This makes the identity resolution both explainable and auditable.
+
+
+VERIFIED SCORES ON SEEDED TEST DATA
+──────────────────────────────────────────────────────────────────────────────
+  Customer      | System | Seeded ambiguity               | Score | Tier
+  --------------|--------|-------------------------------|-------|----------
+  CUST000001    | KYC    | None (clean record)            | 1.00  | CONFIRMED
+  CUST000001    | Card   | None (clean record)            | 1.00  | CONFIRMED
+  CUST000002    | Card   | Name abbreviated: "PRIYA S IYER" vs "Priya Suresh Iyer" | 0.32 | AMBIGUOUS
+  CUST000004    | KYC    | Transliteration: "Anitha" vs "Anita" + PAN absent | 0.55 | AMBIGUOUS
+  CUST000008    | DMS    | Middle name dropped: "Deepika Pillai" vs "Deepika Rajan Pillai" | 0.45 | AMBIGUOUS
+
+  Smoke-test command (no LLM required):
+    python -c "from tools.entity_resolution import resolve_identity; import json;
+               print(json.dumps(resolve_identity('CUST000002')['card'], indent=2))"
+
+
+WHY THIS APPROACH WAS CHOSEN
+──────────────────────────────────────────────────────────────────────────────
+1. No external NLP library dependency — pure Python Jaro-Winkler avoids adding
+   jellyfish or fuzzywuzzy to the stack, keeping the environment portable.
+
+2. Explainable output — every resolution carries method, confidence score, and
+   (for AMBIGUOUS) a reasoning sentence. This is essential for a compliance-facing
+   platform where an auditor may ask why two records were linked.
+
+3. Two-stage design — deterministic scoring handles clear cases cheaply and fast;
+   the LLM is invoked only for genuinely uncertain cases, avoiding unnecessary
+   API cost on every record.
+
+4. Backwards compatible — the flat fields that downstream agents depend on
+   (kyc_id, kyc_status, card_id, dms_id, portfolio_id) are still returned at
+   the top level of identity_map; the resolution_log is additive metadata.
+
+
+==================================================================
+RELATED FILES
+==================================================================
+  tools/entity_resolution.py           — Jaro-Winkler engine + resolve_identity()
+  tools/agent_tools.py                 — get_identity_resolution_map() wrapper
+  agents/client_360/agent.py           — CONFIRMED/AMBIGUOUS/NOT_FOUND instruction block
+  scripts/seed_ambiguous_records.py    — deliberate ambiguity for CUST000002/4/8
+  Plans_ToDo/Client_360_Changes.md     — full phase-by-phase implementation log

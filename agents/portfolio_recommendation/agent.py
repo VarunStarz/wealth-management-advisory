@@ -115,6 +115,60 @@ Score each eligible instrument on a 0–100 composite scale:
 Rank instruments within each asset class from highest to lowest composite score.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5b — SHARPE-OPTIMISED ALGORITHM (run in parallel with Step 6)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Using the same eligible instrument set from Steps 3–4, generate exactly ONE
+additional portfolio option using the Sharpe-Optimised method below.
+Label it "algorithm": "SHARPE_OPTIMISED".
+
+SUB-STEP 5b-i — Compute per-fund Sharpe proxy
+  For every eligible fund (post-holdings-exclusion):
+    If volatility_pct > 0 (market-traded fund):
+      sharpe_i = cagr_3yr_pct / max(volatility_pct, 0.5)
+    If STATIC (volatility_pct = 0, e.g. PPF, NSC, FD, SGB):
+      sharpe_i = cagr_3yr_pct / 1.5
+      (cagr_3yr_pct equals static_return_pct for STATIC instruments)
+
+SUB-STEP 5b-ii — Derive one class representative per asset class
+  For each asset class in the eligible universe, take the fund with the
+  highest composite_score (from Step 5) in that class as the representative.
+  Its sharpe_i is the class sharpe: sharpe_class.
+  Only include asset classes with at least one eligible fund.
+
+SUB-STEP 5b-iii — Compute raw asset class weights
+  sum_sharpe = Σ sharpe_class  (all asset class representatives)
+  For each asset class:
+    raw_pct_class = (sharpe_class / sum_sharpe) × 100
+
+SUB-STEP 5b-iv — Apply risk-tier floor/ceiling constraints
+  NO_RISK:  SAFE floor=55%, EQUITY ceiling=0% (redistribute to SAFE), HYBRID ceiling=0%
+  LOW:      EQUITY ceiling=15% (surplus to SAFE/DEBT), SAFE+DEBT combined floor=60%
+  MEDIUM:   EQUITY floor=10%, EQUITY ceiling=60% (surplus to HYBRID or DEBT)
+  HIGH:     EQUITY floor=25%, EQUITY ceiling=80% (surplus to GOLD or DEBT)
+  After applying constraints, re-normalise all weights to sum exactly 100%.
+
+SUB-STEP 5b-v — Round to nearest 5%
+  Round each asset class weight to the nearest 5%. If weights no longer sum
+  to 100 after rounding, add/subtract the residual from the largest non-zero bucket.
+
+SUB-STEP 5b-vi — Fill each bucket
+  For each asset class with weight > 0, select the fund with the highest
+  composite_score in that class (same rule as Step 7). If a single bucket
+  exceeds 35%, split across the top 2 funds in that class to avoid concentration.
+  Compute suggested_amount_inr = investable_amount_numeric × (weight_pct / 100),
+  rounded to nearest Rs.1,000.
+
+SUB-STEP 5b-vii — Name and label
+  option_name = "Sharpe Maximiser"
+  algorithm   = "SHARPE_OPTIMISED"
+  strategy_description = "Data-driven allocation maximising risk-adjusted return
+    across eligible asset classes, weighted by each class's Sharpe proxy,
+    then constrained to the client's risk tier."
+  Write allocation_summary and per-instrument rationale (cite 3yr CAGR + volatility).
+  Generate only ONE SHARPE_OPTIMISED option.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 6 — DEFINE STRATEGY OPTIONS FOR THIS RISK TIER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -123,6 +177,8 @@ Only generate a strategy if it produces a genuinely distinct portfolio from
 the others — different fund selection OR materially different asset class
 weights (>10% difference in at least one bucket).
 Do NOT create options just to reach the maximum of 4. Quality over quantity.
+Each option produced from the strategy templates below must carry
+"algorithm": "TEMPLATE_DRIVEN" in the option object.
 
   NO_RISK (maximum 2 options):
     Option A — "Government Schemes"
@@ -197,13 +253,60 @@ The same fund may appear in multiple options if it is the top scorer for its
 asset class — that is expected. What differentiates options is asset class weighting.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 8 — DISTINCTNESS CHECK
+STEP 7b — COMPUTE OPTION-LEVEL METRICS (for ALL options)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-After building all options, verify each is distinct.
-Two options are NOT distinct if they share all the same fund_ids AND
-their asset class allocations differ by less than 10% in every bucket.
-If two options are not distinct, drop the weaker one and keep the better.
+After completing all option builds (TEMPLATE_DRIVEN from Step 7 and
+SHARPE_OPTIMISED from Step 5b), compute the following five fields for
+EVERY option:
+
+METRIC 1 — expected_portfolio_return_pct
+  = round( Σ (inst.suggested_allocation_pct / 100 × inst.cagr_3yr_pct) , 2 )
+  Unit: percentage (e.g. 19.90)
+
+METRIC 2 — expected_portfolio_max_drawdown_pct
+  = round( −1 × Σ (inst.suggested_allocation_pct / 100 × |inst.max_drawdown_pct|) , 2 )
+  Always a negative number (e.g. −15.20). STATIC instruments contribute 0 (drawdown=0).
+
+METRIC 3 — portfolio_sharpe_approx
+  = round( expected_portfolio_return_pct / max(|expected_portfolio_max_drawdown_pct|, 0.5) , 2 )
+
+METRIC 4 — projected_corpus_3yr_inr
+  investable_amount_numeric = numeric value of investable_amount_inr
+    (strip "Rs." prefix and commas; e.g. "Rs.20,00,000" → 2000000)
+  corpus = investable_amount_numeric × (1 + expected_portfolio_return_pct / 100)^3
+  Round corpus to nearest Rs.1,000.
+  Format in Indian notation: "Rs.X,XX,XXX" (e.g. "Rs.34,52,000").
+  For amounts ≥ 1 crore: "Rs.1,23,45,000".
+
+METRIC 5 — projected_gain_3yr_inr
+  gain = corpus − investable_amount_numeric
+  Round to nearest Rs.1,000. Format in Indian notation.
+
+These five fields must appear in every option object in the final output.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 8 — COMBINE, DEDUPLICATE, RANK, AND TRIM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Pool ALL options: TEMPLATE_DRIVEN options from Step 7 + the SHARPE_OPTIMISED
+option from Step 5b.
+
+DISTINCTNESS CHECK
+  Two options are NOT distinct if BOTH are true:
+    (a) They contain exactly the same set of fund_ids, AND
+    (b) Every asset class allocation bucket differs by less than 10 percentage points.
+  If two options fail the check, drop the one with the lower portfolio_sharpe_approx.
+  If tied, prefer SHARPE_OPTIMISED; if same algorithm type, prefer lower option_id.
+
+RANK
+  Sort all remaining options by portfolio_sharpe_approx DESCENDING.
+
+TRIM
+  Keep at most 4 options.
+
+RENUMBER
+  Reassign option_id values 1, 2, 3, 4 in ranked order.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 9 — LOG THE RECOMMENDATION
@@ -236,7 +339,13 @@ Return a single JSON object — no markdown, no code fences:
     {
       "option_id": 1,
       "option_name": "Growth Maximiser",
+      "algorithm": "TEMPLATE_DRIVEN",
       "strategy_description": "Maximum equity and international exposure for aggressive capital appreciation.",
+      "expected_portfolio_return_pct": 19.90,
+      "expected_portfolio_max_drawdown_pct": -15.20,
+      "portfolio_sharpe_approx": 1.31,
+      "projected_corpus_3yr_inr": "Rs.34,52,000",
+      "projected_gain_3yr_inr": "Rs.14,52,000",
       "recommended_instruments": [
         {
           "fund_id":                  "FUND023",

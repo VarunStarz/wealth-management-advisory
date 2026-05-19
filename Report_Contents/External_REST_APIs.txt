@@ -129,12 +129,14 @@ Auth      : None required. NSE blocks non-browser User-Agents intermittently;
 
 
 ──────────────────────────────────────────────────────────────────────────────
-7. Google Gemini (via Google ADK) — LLM for all agents
+7. Google Gemini via Vertex AI (Google ADK) — LLM for all agents
 ──────────────────────────────────────────────────────────────────────────────
-Used by   : All 9 agents (client_360, cdd, income_validation, edd,
+Used by   : All 10 agents (guardrail, client_360, cdd, income_validation, edd,
             portfolio_analysis, loans, expenditure, cibil, risk_assessment,
-            report_generation)
-Config    : GOOGLE_API_KEY in config/settings.py (loaded from environment)
+            report_generation, portfolio_recommendation)
+Model     : gemini-2.5-pro on Google Cloud Vertex AI
+Config    : GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION in .env;
+            GOOGLE_GENAI_USE_VERTEXAI=1 enables Vertex AI routing
 Phase     : Core infrastructure — all phases
 
 Why selected:
@@ -142,18 +144,20 @@ Why selected:
   framework for the entire multi-agent pipeline. Each agent is a Gemini
   LLM instance with tool access to the PostgreSQL databases. Gemini was
   chosen for its function-calling capability, long context window, and
-  native ADK integration.
+  native ADK integration. Vertex AI was adopted (16 May 2026) for enterprise
+  SLA, regional data residency, and production-grade quota management.
 
-Auth      : GOOGLE_API_KEY required. Must be set in environment before
-            running api_server.py or main.py.
+Auth      : Google Application Default Credentials (ADC) via gcloud auth.
+            No API key required — authenticated via GCP project identity.
+            Run `gcloud auth application-default login` before starting.
 
 
 ==========================================================
 FALLBACK SUMMARY
 ==========================================================
 All 6 data APIs have hardcoded fallbacks. The pipeline never fails due to
-an unreachable external data source. Only Google Gemini (item 7) is a hard
-dependency — if the API key is missing or quota is exhausted, the pipeline
+an unreachable external data source. Only Google Gemini/Vertex AI (item 7)
+is a hard dependency — if ADC auth fails or quota is exhausted, the pipeline
 will not run.
 
   API                  | Fallback value
@@ -164,3 +168,78 @@ will not run.
   IMF GDP (returns)    | 7.2% (RBI/IMF consensus)
   IMF GDP (income)     | 7.2% (RBI/IMF consensus)
   NSE EQUITY_L.csv     | Name-pattern heuristics
+
+
+==========================================================
+IMPLEMENTATION NOTES — BUGS FOUND AND FIXED DURING TESTING
+==========================================================
+During end-to-end pipeline testing (19 May 2026), all 6 data APIs were found
+to be falling back to hardcoded values on every run. Three root causes were
+identified and fixed.
+
+──────────────────────────────────────────────────────────────────────────────
+Bug 1 — Yahoo Finance: Nifty 500 symbol ^CNX500 delisted
+──────────────────────────────────────────────────────────────────────────────
+Symptom : fetch_benchmark_returns(risk_tier="MEDIUM") always returned the
+          hardcoded fallback of 12.5% instead of a live value.
+Root cause: Yahoo Finance delisted the ticker ^CNX500 ("No data found, symbol
+          may be delisted"). The HTTP call returned 404, triggering the
+          exception handler and the fallback.
+Fix     : Changed the MEDIUM tier ticker from ^CNX500 to ^CRSLDX. Yahoo Finance
+          confirms ^CRSLDX has longName="NIFTY 500" and currency=INR — it is
+          the current active symbol for the same index.
+Impact  : MEDIUM-risk client benchmark now returns a live, computed CAGR instead
+          of a static estimate. Live value verified: 10.77% (3-year CAGR,
+          37 monthly closes as of 19 May 2026).
+
+──────────────────────────────────────────────────────────────────────────────
+Bug 2 — IMF DataMapper API: Mozilla/5.0 User-Agent blocked (HTTP 403)
+──────────────────────────────────────────────────────────────────────────────
+Symptom : Both IMF-dependent functions (fetch_india_inflation_forecast and
+          forecast_income_growth) always returned hardcoded fallback GDP of
+          7.2%. World Bank CPI was live, but GDP was always static.
+Root cause: The IMF DataMapper CDN returns HTTP 403 Forbidden when the request
+          carries a browser-style User-Agent header (Mozilla/5.0). The code
+          was sending this header to avoid bot-detection, but the IMF
+          specifically blocks it. Python's default urllib User-Agent
+          (Python-urllib/3.x) is accepted without restriction.
+Fix     : Removed the User-Agent header from both IMF urllib.request.Request()
+          calls, allowing the default Python UA to be used.
+Impact  : IMF GDP now returns live WEO projections. Live value verified:
+          6.5% for India (2024 WEO), yielding income_growth_forecast of 6.35%
+          for a senior pharma business owner (6.5 × 0.9 multiplier + 0.5%
+          sector premium).
+
+──────────────────────────────────────────────────────────────────────────────
+Bug 3 — EDD Agent: forecast_income_growth always skipped
+──────────────────────────────────────────────────────────────────────────────
+Symptom : income_growth_forecast was always null in the final briefing despite
+          the EDD agent running and the field being defined in the output schema.
+Root cause: forecast_income_growth was Step 4 in the EDD agent's instruction.
+          The LLM executed Steps 1–3 (case history, bank statements, RM flags),
+          determined that escalation_required = true, and short-circuited its
+          output before reaching Step 4 — a well-known LLM behaviour where
+          the model terminates early once the decision outcome is clear.
+Fix     : Moved forecast_income_growth to Step 1 — the very first tool call,
+          before the agent reads any case history or makes any escalation
+          decision. The LLM always executes Step 1. Subsequent steps then read
+          the case history and render the full finding.
+Impact  : income_growth_forecast is now populated on every EDD run. Verified
+          on Scenario 2 (CUST000005): projected_growth_rate_pct=6.35,
+          consistency_assessment=FLAG_FOR_REVIEW (correct — declared income
+          ₹1.5Cr vs spend-inferred ₹3.5Cr despite forecast implying ₹1.7Cr
+          trajectory).
+
+──────────────────────────────────────────────────────────────────────────────
+Live API Verification — Scenario 2, 19 May 2026
+──────────────────────────────────────────────────────────────────────────────
+All 6 APIs confirmed live on a FULL_BRIEFING run (CUST000005, EDD triggered):
+
+  API                       | Live value returned            | Fallback (if used)
+  --------------------------|--------------------------------|--------------------
+  Yahoo Finance ^CRSLDX     | 10.77% 3yr CAGR               | 12.5%
+  Yahoo Finance ^NSEI       | Used for HIGH tier (working)   | 15.0%
+  World Bank CPI            | 4.95% (India 2024)             | 4.5%
+  IMF GDP (real returns)    | 6.5% (India WEO)              | 7.2%
+  IMF GDP (income forecast) | 6.35% (derived rate)           | 7.2% base
+  NSE EQUITY_L.csv          | 166KB CSV downloaded, no match | Name heuristics

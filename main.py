@@ -609,7 +609,7 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
 # Curated subset for professor demo — covers all major pipeline capabilities.
 # Run with: python main.py --list-demo   (to list)
 #           python main.py --scenario N  (to run any scenario by number)
-DEMO_SCENARIOS = [1, 2, 7, 18, 19, 20, 21, 22]
+DEMO_SCENARIOS = [1, 2, 7, 18, 20]
 
 SCENARIOS = {
     1:  {"label": "Full briefing — standard HNI (clean profile)",        "rm_id": "RM001", "query": "Mr Arjun Menon (CUST000001) is here for his annual wealth review. He wants to know how his portfolio is doing and whether there are any areas we should look at. Can you give me a full briefing before I meet him?"},

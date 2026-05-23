@@ -1,0 +1,13 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'VITE_API_URL=https://wealth-platform-api-955888870899.us-central1.run.app'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/project-15058b99-a2c0-4a75-8be/wealth-platform/ui:latest'
+      - '.'
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/project-15058b99-a2c0-4a75-8be/wealth-platform/ui:latest']
+images:
+  - 'us-central1-docker.pkg.dev/project-15058b99-a2c0-4a75-8be/wealth-platform/ui:latest'

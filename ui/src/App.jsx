@@ -16,7 +16,7 @@ import RiskPreferenceSelector  from './components/RiskPreferenceSelector.jsx';
 import RealReturnsPanel        from './components/RealReturnsPanel.jsx';
 import RecommendationPanel     from './components/RecommendationPanel.jsx';
 
-const BASE     = 'http://localhost:8000';
+const BASE     = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const RM_IDS   = ['RM_USER', 'RM001', 'RM002', 'RM003', 'RM004', 'RM005'];
 
 // ── Query input panel ─────────────────────────────────────────

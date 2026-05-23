@@ -38,7 +38,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        # Cloud Run UI service
+        "https://wealth-platform-ui-955888870899.us-central1.run.app",
+    ],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )

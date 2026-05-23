@@ -200,16 +200,20 @@ function QueryPanel({ onSubmit, loading }) {
   );
 }
 
+// ── Pipeline step definitions (shared between App state + LoadingView) ──
+const PIPELINE_STEPS = [
+  'Guardrail check',
+  'Client 360 profile',
+  'CDD + Income + Portfolio + Loans + Expenditure + CIBIL (parallel)',
+  'EDD (if triggered by CDD)',
+  'Risk assessment',
+  'Generating advisory briefing',
+];
+
 // ── Loading state ─────────────────────────────────────────────
-function LoadingView() {
-  const steps = [
-    'Guardrail check',
-    'Client 360 profile',
-    'CDD + Income + Portfolio + Loans + Expenditure + CIBIL (parallel)',
-    'EDD (if triggered by CDD)',
-    'Risk assessment',
-    'Generating advisory briefing',
-  ];
+function LoadingView({ stepStatuses }) {
+  const done = stepStatuses.filter(s => s.status === 'completed' || s.status === 'skipped').length;
+  const pct  = stepStatuses.length ? Math.round((done / stepStatuses.length) * 100) : 0;
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center gap-7 px-4">
@@ -218,16 +222,53 @@ function LoadingView() {
         <p className="text-slate-700 font-semibold text-lg">Pipeline running</p>
         <p className="text-slate-400 text-sm mt-1">This typically takes 1–3 minutes</p>
       </div>
-      <div className="w-full max-w-sm bg-white rounded-2xl border border-slate-200 p-5 space-y-2.5">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-slate-200 p-5">
         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Processing steps</p>
-        {steps.map((s, i) => (
-          <div key={i} className="flex items-start gap-3 text-sm text-slate-500">
-            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-slate-100 text-slate-400 text-xs font-bold flex items-center justify-center mt-0.5">
-              {i + 1}
-            </span>
-            {s}
+        <div className="space-y-2.5">
+          {stepStatuses.map((s, i) => (
+            <div key={i} className="flex items-start gap-3 text-sm">
+              {/* Badge */}
+              <span className={`flex-shrink-0 w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center mt-0.5 ${
+                s.status === 'completed' ? 'bg-green-100 text-green-700' :
+                s.status === 'skipped'   ? 'bg-yellow-100 text-yellow-700' :
+                s.status === 'running'   ? 'bg-amber-100 text-amber-600 animate-pulse' :
+                'bg-slate-100 text-slate-400'
+              }`}>
+                {s.status === 'completed' ? '✓' : s.status === 'skipped' ? '–' : i + 1}
+              </span>
+              {/* Label */}
+              <span className={`flex-1 leading-snug ${
+                s.status === 'completed' ? 'text-green-700' :
+                s.status === 'skipped'   ? 'text-yellow-600' :
+                s.status === 'running'   ? 'text-slate-800 font-medium' :
+                'text-slate-400'
+              }`}>
+                {s.label}
+              </span>
+              {/* Status pill */}
+              {s.status === 'completed' && (
+                <span className="flex-shrink-0 text-xs font-semibold text-green-600 mt-0.5">Completed</span>
+              )}
+              {s.status === 'skipped' && (
+                <span className="flex-shrink-0 text-xs font-semibold text-yellow-600 mt-0.5">Skipped</span>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Progress bar */}
+        <div className="mt-4 pt-3 border-t border-slate-100">
+          <div className="flex justify-between text-xs text-slate-400 mb-1.5">
+            <span>Progress</span>
+            <span>{pct}%</span>
           </div>
-        ))}
+          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-amber-500 h-2 rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -285,11 +326,12 @@ function ErrorView({ message, onReset }) {
 
 // ── Main App ──────────────────────────────────────────────────
 export default function App() {
-  const [briefing,    setBriefing]    = useState(null);
-  const [loading,     setLoading]     = useState(false);
-  const [error,       setError]       = useState('');
+  const [briefing,     setBriefing]     = useState(null);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState('');
+  const [stepStatuses, setStepStatuses] = useState([]);
   // pending holds { query, rmId } while the risk preference screen is shown
-  const [pending,     setPending]     = useState(null);
+  const [pending,      setPending]      = useState(null);
 
   // Step 1: query form submitted → show risk preference screen
   const handleSubmit = (query, rmId) => {
@@ -298,11 +340,14 @@ export default function App() {
     setPending({ query, rmId });
   };
 
-  // Step 2a: risk preference chosen (or skipped) → run pipeline
+  // Step 2a: risk preference chosen (or skipped) → run pipeline via SSE stream
   const runPipeline = async (query, rmId, riskPreference) => {
     setPending(null);
     setLoading(true);
     setError('');
+    setBriefing(null);
+    // Initialise all steps as pending
+    setStepStatuses(PIPELINE_STEPS.map(label => ({ label, status: 'pending' })));
 
     const controller = new AbortController();
     const timeout    = setTimeout(() => controller.abort(), 360_000); // 6 min
@@ -315,11 +360,45 @@ export default function App() {
         signal:  controller.signal,
       });
       clearTimeout(timeout);
+
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail?.detail || `Server responded with ${res.status}`);
       }
-      setBriefing(await res.json());
+
+      // Stream SSE events from the response body
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        // SSE messages are separated by \n\n
+        const events = buffer.split('\n\n');
+        buffer = events.pop(); // keep any incomplete trailing message
+
+        for (const event of events) {
+          const line = event.trim();
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'progress') {
+              setStepStatuses(prev =>
+                prev.map((s, i) => i === data.step - 1 ? { ...s, status: data.status } : s)
+              );
+            } else if (data.type === 'result') {
+              setBriefing(data.payload);
+            } else if (data.type === 'error') {
+              setError(data.message || 'An unexpected pipeline error occurred.');
+            }
+          } catch {
+            // ignore malformed SSE line
+          }
+        }
+      }
     } catch (err) {
       clearTimeout(timeout);
       setError(
@@ -334,7 +413,7 @@ export default function App() {
 
   const handleReset = () => { setBriefing(null); setError(''); setPending(null); };
 
-  if (loading)  return <LoadingView />;
+  if (loading)  return <LoadingView stepStatuses={stepStatuses} />;
   if (error)    return <ErrorView message={error} onReset={handleReset} />;
 
   // Risk preference screen (between query form and pipeline run)

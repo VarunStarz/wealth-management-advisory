@@ -15,6 +15,7 @@ Run:
 Swagger UI: http://localhost:8000/docs
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -25,6 +26,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from main import process_rm_query, SCENARIOS, DEMO_SCENARIOS
@@ -117,11 +119,43 @@ async def list_scenarios():
 @app.post("/api/query", tags=["Pipeline"])
 async def run_query(body: QueryRequest):
     """
-    Runs the full advisory pipeline for a free-form RM query.
-    Returns the structured JSON briefing (or a blocked/compliance-block response).
+    Runs the full advisory pipeline and streams progress via Server-Sent Events.
+    Events: {"type":"progress","step":1-6,"status":"running|completed|skipped","label":"..."}
+            {"type":"result","payload":{...briefing...}}
+            {"type":"error","message":"..."}
     """
-    result = await process_rm_query(body.query, body.rm_id, body.risk_preference)
-    return _parse_pipeline_result(result)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _on_progress(step: int, status: str, label: str) -> None:
+        await queue.put({"type": "progress", "step": step, "status": status, "label": label})
+
+    async def _run_pipeline() -> None:
+        try:
+            result = await process_rm_query(
+                body.query, body.rm_id, body.risk_preference, _on_progress
+            )
+            await queue.put({"type": "result", "payload": _parse_pipeline_result(result)})
+        except Exception as exc:
+            await queue.put({"type": "error", "message": str(exc)})
+        finally:
+            await queue.put(None)  # sentinel — ends the stream
+
+    async def _stream():
+        asyncio.create_task(_run_pipeline())
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/scenario/{n}", tags=["Pipeline"])

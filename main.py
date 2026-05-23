@@ -285,6 +285,7 @@ async def run_pipeline(
     guardrail_notes: str = "",
     risk_preference: str = "MEDIUM",
     investable_amount_inr: float = None,
+    on_progress=None,
 ) -> str:
     """
     Runs agents in the correct order for the given scope.
@@ -295,6 +296,7 @@ async def run_pipeline(
     outputs: dict[str, str] = {}
 
     # ── STEP 1: Client 360 (always, always first) ─────────────
+    if on_progress: await on_progress(2, "running", "Client 360 profile")
     print("  [Step 1] Client 360 Agent...")
     logger.info(f"[{customer_id}] Step 1 → Client 360 Agent starting")
     t0 = time.time()
@@ -310,6 +312,7 @@ async def run_pipeline(
     )
     logger.info(f"[{customer_id}] Step 1 ✓ Client 360 done ({time.time()-t0:.1f}s)")
     print("     ✓ Client 360 done")
+    if on_progress: await on_progress(2, "completed", "Client 360 profile")
 
     # ── STEP 2: Parallel analysis (scope-driven) ───────────────
     run_cdd         = approved_for in ("FULL_BRIEFING", "CDD_ONLY",       "RISK_ONLY", "WEALTH_RECOMMENDATION")
@@ -327,6 +330,7 @@ async def run_pipeline(
         if run_loans:       agents_running.append("Loans")
         if run_expenditure: agents_running.append("Expenditure")
         if run_cibil:       agents_running.append("CIBIL Score")
+        if on_progress: await on_progress(3, "running", "CDD + Income + Portfolio + Loans + Expenditure + CIBIL (parallel)")
         print(f"  [Step 2] Running in parallel: {', '.join(agents_running)}...")
 
     async def _run_cdd():
@@ -419,6 +423,7 @@ async def run_pipeline(
         for key, result in zip(task_keys, results):
             outputs[key] = result
         print("     ✓ Parallel step done")
+        if on_progress: await on_progress(3, "completed", "CDD + Income + Portfolio + Loans + Expenditure + CIBIL (parallel)")
 
     # ── Sanctions hard stop (after CDD) ───────────────────────
     if "cdd" in outputs and _sanctions_fail(outputs["cdd"]):
@@ -448,10 +453,12 @@ async def run_pipeline(
             f"Run the EDD assessment for this customer."
         )
         print("     ✓ EDD done")
+        if on_progress: await on_progress(4, "completed", "EDD (if triggered by CDD)")
     else:
         if "cdd" in outputs:
             print("  [Step 3] EDD — skipped (not triggered by CDD)")
         outputs["edd"] = "EDD not triggered — client cleared CDD."
+        if on_progress: await on_progress(4, "skipped", "EDD (if triggered by CDD)")
 
     # ── STEP 3b: Portfolio Recommendation (WEALTH_RECOMMENDATION only) ──
     if approved_for == "WEALTH_RECOMMENDATION":
@@ -495,8 +502,12 @@ async def run_pipeline(
             f"Compute the composite 360 risk score and red flag list."
         )
         print("     ✓ Risk Assessment done")
+        if on_progress: await on_progress(5, "completed", "Risk assessment")
+    else:
+        if on_progress: await on_progress(5, "skipped", "Risk assessment")
 
     # ── STEP 5: Report Generation (always last) ────────────────
+    if on_progress: await on_progress(6, "running", "Generating advisory briefing")
     print("  [Step 5] Generating advisory briefing...")
     sid = _sid(rm_id, "report")
     await session_service.create_session(
@@ -520,6 +531,7 @@ async def run_pipeline(
         f"Using all of the above, produce the complete structured advisory briefing."
     )
     print("     ✓ Briefing ready\n")
+    if on_progress: await on_progress(6, "completed", "Generating advisory briefing")
     if not briefing or not briefing.strip():
         return json.dumps({
             "pipeline_error": True,
@@ -533,7 +545,7 @@ async def run_pipeline(
 
 
 # ── Query handler ─────────────────────────────────────────────
-async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: str = "MEDIUM") -> str:
+async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: str = "MEDIUM", on_progress=None) -> str:
     print(f"\n{'='*68}")
     print(f"  WEALTH ADVISORY INTELLIGENCE PLATFORM")
     print(f"  RM: {rm_id}")
@@ -541,8 +553,10 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
     print(f"\nQuery: {query}\n")
 
     # Programmatic pre-check
+    if on_progress: await on_progress(1, "running", "Guardrail check")
     pre_check = validate_query(query)
     if not pre_check["passed"]:
+        if on_progress: await on_progress(1, "completed", "Guardrail check")
         print(f"[BLOCKED] GUARDRAIL (pre-check): {pre_check['reason']}")
         return pre_check["reason"]
 
@@ -558,6 +572,7 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
 
     guardrail_result = _extract_json(guardrail_response)
     if not guardrail_result:
+        if on_progress: await on_progress(1, "completed", "Guardrail check")
         print("[BLOCKED] GUARDRAIL (parse failure): agent returned non-JSON response.")
         return (
             "BLOCKED: The guardrail agent returned an unreadable response. "
@@ -565,6 +580,7 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
         )
 
     if guardrail_result.get("guardrail_status") == "BLOCKED":
+        if on_progress: await on_progress(1, "completed", "Guardrail check")
         reason = guardrail_result.get("block_reason", "Query not permitted.")
         alt    = guardrail_result.get("suggested_alternative", "")
         print(f"\n[BLOCKED] GUARDRAIL")
@@ -573,6 +589,7 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
             print(f"   Suggestion: {alt}")
         return f"BLOCKED: {reason}" + (f"\n\nSuggested: {alt}" if alt else "")
 
+    if on_progress: await on_progress(1, "completed", "Guardrail check")
     customer_id           = guardrail_result.get("customer_id", _extract_customer_id(query))
     approved_for          = guardrail_result.get("approved_for", "FULL_BRIEFING")
     notes                 = guardrail_result.get("notes", "")
@@ -594,6 +611,7 @@ async def process_rm_query(query: str, rm_id: str = "RM_USER", risk_preference: 
         guardrail_notes=notes,
         risk_preference=risk_preference,
         investable_amount_inr=investable_amount_inr,
+        on_progress=on_progress,
     )
 
     try:

@@ -268,9 +268,8 @@ def get_edd_case_history(customer_id: str) -> str:
     pan = _get_pan(customer_id)
     kyc_id = _get_kyc_id(pan)
     cases = query_db("kyc",
-        "SELECT * FROM edd_cases WHERE customer_id = %s ORDER BY open_date DESC",
-        (customer_id,))
-    cases = [c for c in cases if "error" not in c]
+        "SELECT * FROM edd_cases WHERE kyc_id = %s ORDER BY open_date DESC",
+        (kyc_id,)) if kyc_id else []
 
     open_cases      = [c for c in cases if c["case_status"] in
                        ("OPEN", "IN_PROGRESS", "PENDING_DOCS")]

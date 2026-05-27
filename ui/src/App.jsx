@@ -220,7 +220,7 @@ function LoadingView({ stepStatuses }) {
       <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
       <div className="text-center">
         <p className="text-slate-700 font-semibold text-lg">Pipeline running</p>
-        <p className="text-slate-400 text-sm mt-1">This typically takes 1–3 minutes</p>
+        <p className="text-slate-400 text-sm mt-1">This typically takes 3–5 minutes</p>
       </div>
       <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 p-5">
         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Processing steps</p>

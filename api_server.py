@@ -144,9 +144,10 @@ async def run_query(body: QueryRequest):
         asyncio.create_task(_run_pipeline())
         while True:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=20.0)
-            except asyncio.TimeoutError:
-                yield ": heartbeat\n\n"
+                event = await asyncio.wait_for(queue.get(), timeout=15.0)
+            except (asyncio.TimeoutError, TimeoutError):
+                # Pad to >1 KB so Cloud Run's proxy flushes the chunk to the browser
+                yield 'data: {"type":"ping"}\n\n' + ": " + " " * 2048 + "\n\n"
                 continue
             if event is None:
                 break

@@ -11,7 +11,8 @@ load_dotenv()
 # ── Gemini model ─────────────────────────────────────────────
 #GEMINI_MODEL   = "gemini-3-pro-preview"
 #GEMINI_MODEL   = "gemini-3.1-pro-preview"
-GEMINI_MODEL   = "gemini-2.5-pro"
+#GEMINI_MODEL   = "gemini-2.5-pro"
+GEMINI_MODEL   = "gemini-2.5-flash"
 
 # ── Auth — Gemini Developer API (commented out: migrated to Vertex AI) ───────
 #GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")

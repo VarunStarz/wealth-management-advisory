@@ -143,7 +143,11 @@ async def run_query(body: QueryRequest):
     async def _stream():
         asyncio.create_task(_run_pipeline())
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=20.0)
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+                continue
             if event is None:
                 break
             yield f"data: {json.dumps(event)}\n\n"
